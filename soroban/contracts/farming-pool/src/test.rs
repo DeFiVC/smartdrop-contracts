@@ -3577,3 +3577,44 @@ fn test_global_multiplier_history_offset_past_end_returns_empty() {
     assert_eq!(page.total, 1);
     assert_eq!(page.events.len(), 0);
 }
+
+// ── stake input validation (#440, #441, #442, #443) ───────────────────────────
+
+#[test]
+fn test_stake_rejects_zero_amount() {
+    let t = setup(2, 1);
+    assert!(matches!(
+        t.client.try_stake(&t.user, &0i128),
+        Err(Ok(PoolError::InvalidAmount))
+    ));
+}
+
+#[test]
+fn test_stake_rejects_negative_amount() {
+    let t = setup(2, 1);
+    assert!(matches!(
+        t.client.try_stake(&t.user, &-1i128),
+        Err(Ok(PoolError::InvalidAmount))
+    ));
+}
+
+#[test]
+fn test_stake_rejects_amount_exceeding_max() {
+    let t = setup(2, 1);
+    let over_max = MAX_STAKE_AMOUNT + 1;
+    assert!(matches!(
+        t.client.try_stake(&t.user, &over_max),
+        Err(Ok(PoolError::ExceedsMaxStake))
+    ));
+}
+
+#[test]
+fn test_stake_topup_rejects_total_exceeding_max() {
+    let t = setup(2, 1);
+    t.token_sac.mint(&t.user, &MAX_STAKE_AMOUNT);
+    t.client.stake(&t.user, &MAX_STAKE_AMOUNT);
+    assert!(matches!(
+        t.client.try_stake(&t.user, &1i128),
+        Err(Ok(PoolError::ExceedsMaxStake))
+    ));
+}
