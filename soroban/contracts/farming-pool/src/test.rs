@@ -2825,6 +2825,44 @@ fn test_stake_reverts_entirely_if_stake_token_naively_reenters() {
     assert_eq!(stake.amount, 500);
 }
 
+// ── stake validation (top-up) ────────────────────────────────────────────────
+
+#[test]
+fn test_stake_topup_min_stake_applies_to_resulting_position() {
+    // The minimum is checked against the caller's total position, as in
+    // `lock_assets`. A top-up smaller than the minimum is accepted when the
+    // resulting position clears it.
+    let t = setup(1, 1);
+    t.client.stake(&t.user, &100);
+    t.client.set_min_stake_amount(&500);
+
+    t.client.stake(&t.user, &450);
+
+    assert_eq!(t.client.get_stake(&t.user).unwrap().amount, 550);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn test_stake_topup_below_min_stake_for_resulting_position_is_rejected() {
+    let t = setup(1, 1);
+    t.client.stake(&t.user, &100);
+    t.client.set_min_stake_amount(&500);
+
+    // 100 + 100 = 200 total, still below the 500 minimum.
+    t.client.stake(&t.user, &100);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #18)")]
+fn test_stake_topup_exceeding_max_stake_returns_typed_error() {
+    let t = setup(1, 1);
+    t.token_sac.mint(&t.user, &2_000_000_000_000_000_000i128);
+    t.client.stake(&t.user, &1_000_000_000_000_000_000i128);
+
+    // Total would be 10^18 + 1, one above MAX_STAKE_AMOUNT.
+    t.client.stake(&t.user, &1);
+}
+
 // ── unstake ─────────────────────────────────────────────────────────────────
 
 #[test]
