@@ -29,6 +29,12 @@ const MIN_STAKE_AMOUNT: i128 = 1_000_000;
 const MAX_STAKE_AMOUNT: i128 = 10i128.pow(18);
 // Minimum lock period in ledgers required to prevent flash-loan-style attacks.
 const MIN_LOCK_PERIOD: u32 = 1;
+// Maximum global multiplier, mirroring the farming pool's own limit so an
+// invalid multiplier is caught before pool deployment (#494).
+const MAX_GLOBAL_MULTIPLIER: u32 = 1_000;
+// Maximum credit rate per ledger, mirroring the farming pool's own limit so an
+// excessive daily rate is caught before pool deployment (#495).
+const MAX_CREDIT_RATE: i128 = 100_000_000;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -54,7 +60,11 @@ fn daily_rate_to_credit_rate(daily_rate: u128) -> Result<i128, FactoryError> {
         return Err(FactoryError::InvalidCreditRate);
     }
     let per_ledger = daily_rate.div_ceil(LEDGERS_PER_DAY);
-    i128::try_from(per_ledger).map_err(|_| FactoryError::InvalidCreditRate)
+    let credit_rate = i128::try_from(per_ledger).map_err(|_| FactoryError::InvalidCreditRate)?;
+    if credit_rate > MAX_CREDIT_RATE {
+        return Err(FactoryError::InvalidCreditRate);
+    }
+    Ok(credit_rate)
 }
 
 /// Publishes a `pool_gap` event for a pool ID below `PoolCount` whose record is
@@ -307,7 +317,7 @@ fn create_pool_inner(
 
     validate_asset(&env, &asset)?;
 
-    if global_multiplier < 1 {
+    if global_multiplier < 1 || global_multiplier > MAX_GLOBAL_MULTIPLIER {
         return Err(FactoryError::InvalidGlobalMultiplier);
     }
     let credit_rate = daily_rate_to_credit_rate(daily_rate)?;
