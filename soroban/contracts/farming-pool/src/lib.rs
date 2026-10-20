@@ -16,7 +16,7 @@ use types::{
     BoostHistoryPage, CreditRateEvent, CreditRateHistoryPage, DataKey, GlobalMultiplierEvent,
     GlobalMultiplierHistoryPage, ListWhitelistedResponse, Position, StakeEvent,
     StakeHistoryPage,
-    UserStake, WhitelistEvent, WhitelistHistoryPage, UserActivity, TierInfo, DistributionEvent, PoolAnalytics,
+    UserStake, WhitelistEvent, WhitelistHistoryPage, UserActivity, TierInfo, DistributionEvent, DistributionHistoryPage, PoolAnalytics,
 };
 
 // Expose compiled WASM bytes so sibling crates (e.g. `factory`) can upload the
@@ -3444,6 +3444,78 @@ impl FarmingPool {
         })
     }
 
+    // ── Feature improvements: #566, #567, #568, #569 ───────────────────────
+
+    /// Return a paginated audit trail of bulk reward distributions (Issue #566).
+    ///
+    /// Each entry records the number of users rewarded, the total amount
+    /// distributed, the admin who ran the distribution, and the ledger at which
+    /// it happened. Events are stored in chronological order; pass `offset = 0`
+    /// and advance by `limit` to walk the full history.
+    ///
+    /// `offset`: zero-based index of the first event to return.
+    /// `limit`: maximum number of events to return per call.
+    pub fn get_distribution_history(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<DistributionHistoryPage, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        let total: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DistributionEventCount)
+            .unwrap_or(0);
+        let mut events: Vec<DistributionEvent> = Vec::new(&env);
+        let mut i = offset;
+        let mut count = 0u32;
+        while i < total && count < limit {
+            if let Some(event) = env
+                .storage()
+                .persistent()
+                .get::<_, DistributionEvent>(&DataKey::DistributionHistory(i))
+            {
+                events.push_back(event);
+            }
+            i += 1;
+            count += 1;
+        }
+
+        Ok(DistributionHistoryPage { events, total })
+    }
+
+    /// Return the admin proposed by `propose_admin` that has not yet accepted, or `None` (Issue #567).
+    pub fn get_pending_admin(env: Env) -> Result<Option<Address>, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        Ok(env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::PendingAdmin))
+    }
+
+    /// Return whether whitelist mode is currently enabled (Issue #568).
+    pub fn is_whitelist_enabled(env: Env) -> Result<bool, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        Ok(whitelist_enabled(&env))
+    }
+
+    /// Return the peak total staked amount ever recorded, in stroops (Issue #569).
+    pub fn get_peak_total_staked(env: Env) -> Result<i128, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::PeakTotalStaked)
+            .unwrap_or(0))
+    }
 }
 
 mod test;

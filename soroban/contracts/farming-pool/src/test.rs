@@ -4455,3 +4455,83 @@ fn test_get_user_summary_aggregate() {
     assert_eq!(summary1.is_whitelisted, true);
     assert!(summary1.unlock_ledger > 0);
 }
+
+// ── Feature improvements: #566, #567, #568, #569 ──────────────────────────────
+
+#[test]
+fn test_get_distribution_history_pages_bulk_rewards() {
+    let t = setup(1, 10);
+
+    let empty = t.client.get_distribution_history(&0, &10);
+    assert_eq!(empty.total, 0);
+    assert_eq!(empty.events.len(), 0);
+
+    let mut first = Vec::new(&t.env);
+    first.push_back(t.user.clone());
+    t.client.distribute_bulk_rewards(&first, &100);
+
+    let mut second = Vec::new(&t.env);
+    second.push_back(t.user.clone());
+    second.push_back(Address::generate(&t.env));
+    t.client.distribute_bulk_rewards(&second, &50);
+
+    let page = t.client.get_distribution_history(&0, &10);
+    assert_eq!(page.total, 2);
+    assert_eq!(page.events.len(), 2);
+    let e0 = page.events.get(0).unwrap();
+    assert_eq!(e0.user_count, 1);
+    assert_eq!(e0.total_amount, 100);
+    assert_eq!(e0.admin, t.admin);
+    let e1 = page.events.get(1).unwrap();
+    assert_eq!(e1.user_count, 2);
+    assert_eq!(e1.total_amount, 100);
+
+    let tail = t.client.get_distribution_history(&1, &1);
+    assert_eq!(tail.total, 2);
+    assert_eq!(tail.events.len(), 1);
+    assert_eq!(tail.events.get(0).unwrap().user_count, 2);
+
+    let past_end = t.client.get_distribution_history(&5, &10);
+    assert_eq!(past_end.total, 2);
+    assert_eq!(past_end.events.len(), 0);
+}
+
+#[test]
+fn test_get_pending_admin_tracks_handoff() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.get_pending_admin(), None);
+
+    let new_admin = Address::generate(&t.env);
+    t.client.propose_admin(&new_admin);
+    assert_eq!(t.client.get_pending_admin(), Some(new_admin.clone()));
+    assert_eq!(t.client.admin(), t.admin);
+
+    t.client.accept_admin();
+    assert_eq!(t.client.get_pending_admin(), None);
+    assert_eq!(t.client.admin(), new_admin);
+}
+
+#[test]
+fn test_is_whitelist_enabled_reflects_toggle() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.is_whitelist_enabled(), false);
+
+    t.client.enable_whitelist();
+    assert_eq!(t.client.is_whitelist_enabled(), true);
+
+    t.client.disable_whitelist();
+    assert_eq!(t.client.is_whitelist_enabled(), false);
+}
+
+#[test]
+fn test_get_peak_total_staked_survives_unstake() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.get_peak_total_staked(), 0);
+
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.get_peak_total_staked(), 1_000);
+
+    t.client.unstake(&t.user, &600);
+    assert_eq!(t.client.total_staked(), 400);
+    assert_eq!(t.client.get_peak_total_staked(), 1_000);
+}
