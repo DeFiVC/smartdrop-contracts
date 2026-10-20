@@ -100,6 +100,7 @@ Emitted by `unlock_assets` when a user withdraws assets from the pool.
 | :--- | :--- | :--- |
 | `user` | `Address` | The wallet address that unlocked assets. |
 | `amount` | `i128` | The quantity of assets withdrawn in this call. |
+| `credits_earned` | `i128` | The credits accrued and checkpointed during this unlock call (i.e. the delta since the previous checkpoint). |
 | `total_credits` | `i128` | The user's checkpointed total credit balance at the time of withdrawal. |
 
 ### `paused`
@@ -175,7 +176,8 @@ Emitted by `set_boost` when a user sets their allocation percentage.
 | Field | Rust Type | Description |
 | :--- | :--- | :--- |
 | `user` | `Address` | The user who set their boost allocation. |
-| `allocation_pct` | `u32` | The allocation percentage (1-100) applied. |
+| `old_allocation_pct` | `u32` | The previous allocation percentage (0 if user had no boost). |
+| `allocation_pct` | `u32` | The new allocation percentage (1-100) applied. |
 | `multiplier` | `u32` | The global multiplier in effect at the time of the call. |
 
 ### `mult_set` (boost)
@@ -188,8 +190,22 @@ Emitted by `set_global_multiplier`.
 
 ## 3. VestingWallet Contract (`soroban/contracts/vesting-wallet`)
 
+### `init`
+Emitted by `initialize` when the vesting schedule is created.
+
+* **Topics:** `(Symbol, Symbol)` -> `(symbol_short!("vest"), symbol_short!("init"))`
+* **Payload Structure (tuple order):**
+
+| Field | Rust Type | Description |
+| :--- | :--- | :--- |
+| `beneficiary` | `Address` | The beneficiary the schedule was created for. |
+| `token` | `Address` | The token being vested. |
+| `total_amount` | `i128` | Total amount pulled from `admin`. |
+| `start_ledger` | `u32` | Ledger at which linear vesting begins. |
+| `end_ledger` | `u32` | Ledger at which the full amount is vested. |
+
 ### `released`
-Emitted by `release` whenever a nonzero amount is transferred to the beneficiary.
+Emitted by `release` (and by `release_all`) whenever a nonzero amount is transferred to the beneficiary. A call with nothing to release emits nothing.
 
 * **Topics:** `(Symbol, Symbol)` -> `(symbol_short!("vest"), symbol_short!("released"))`
 * **Payload Structure (tuple order):**
@@ -198,6 +214,9 @@ Emitted by `release` whenever a nonzero amount is transferred to the beneficiary
 | :--- | :--- | :--- |
 | `beneficiary` | `Address` | The address that received the released tokens. |
 | `releasable` | `i128` | The amount transferred in this call. |
+| `released_total` | `i128` | The cumulative released total **after** this call. |
+
+See [`vesting-api.md`](vesting-api.md) for the full VestingWallet entry-point reference.
 
 ### `revoked`
 Emitted by `revoke` (admin-only, requires `revocable = true` and not already revoked).

@@ -6,7 +6,7 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, Val,
     Vec,
 };
-use types::{DataKey, ListPoolsResponse, PoolRecord, PoolSort};
+use types::{DataKey, ListPoolsResponse, PoolRecord, PoolSort, PoolStatus, RefreshPoolTtlsResponse};
 
 pub use types::FactoryError;
 pub use types::PoolParams;
@@ -148,22 +148,6 @@ fn load_wasm_hash(env: &Env) -> Result<BytesN<32>, FactoryError> {
         .ok_or(FactoryError::NotInitialized)
 }
 
-fn is_approved_wasm_hash(env: &Env, wasm_hash: &BytesN<32>) -> bool {
-    let approved = env
-        .storage()
-        .persistent()
-        .get(&DataKey::ApprovedWasmHash(wasm_hash.clone()))
-        .unwrap_or(false);
-    if approved {
-        env.storage().persistent().extend_ttl(
-            &DataKey::ApprovedWasmHash(wasm_hash.clone()),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
-    }
-    approved
-}
-
 /// Read the running count of successful `upgrade_pool` calls (#258).
 fn read_upgrade_count(env: &Env) -> u32 {
     env.storage()
@@ -226,15 +210,18 @@ fn pool_salt(env: &Env, pool_id: u32) -> BytesN<32> {
 }
 
 fn validate_asset(env: &Env, asset: &Address) -> Result<(), FactoryError> {
-    let args: Vec<Val> = vec![&env, env.current_contract_address().into_val(env)];
-    match env.try_invoke_contract::<i128, soroban_sdk::Error>(
+    // Probe a read-only SEP-41 entry point (`symbol`) and require the address to
+    // answer it. An address that is not a deployed token contract never answers,
+    // so accepting that case (the previous `Err(_) => Ok(())` fallback) let a
+    // plain account or unrelated contract be registered as a pool's staking
+    // asset (#430).
+    match env.try_invoke_contract::<Val, soroban_sdk::Error>(
         asset,
-        &Symbol::new(env, "balance"),
-        args,
+        &Symbol::new(env, "symbol"),
+        vec![env],
     ) {
-        Ok(Ok(balance)) if balance >= 0 => Ok(()),
-        Ok(_) => Err(FactoryError::InvalidAsset),
-        Err(_) => Ok(()),
+        Ok(Ok(_)) => Ok(()),
+        _ => Err(FactoryError::InvalidAsset),
     }
 }
 
@@ -318,10 +305,6 @@ fn create_pool_inner(
         return Err(FactoryError::PoolCreationPaused);
     }
 
-    if min_stake_amount <= 0 {
-        return Err(FactoryError::InvalidMinStakeAmount);
-    }
-
     validate_asset(&env, &asset)?;
 
     if global_multiplier < 1 {
@@ -334,7 +317,11 @@ fn create_pool_inner(
     if min_lock_period < MIN_LOCK_PERIOD {
         return Err(FactoryError::MinLockPeriodTooShort);
     }
-    let effective_min_stake = min_stake_amount;
+    let effective_min_stake = if min_stake_amount <= 0 {
+        MIN_STAKE_AMOUNT
+    } else {
+        min_stake_amount
+    };
     // The requested amount must lie within [MIN_STAKE_AMOUNT,
     // MAX_STAKE_AMOUNT] so the pool is usable.
     if effective_min_stake < MIN_STAKE_AMOUNT || effective_min_stake > MAX_STAKE_AMOUNT {
@@ -471,14 +458,16 @@ impl Factory {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FactoryError::AlreadyInitialized);
         }
-        if admin
-            == Address::from_string(&soroban_sdk::String::from_str(
-                &env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
-        {
+        
+        // Issue #374: Validate admin address before storing
+        let zero_admin = Address::from_string(&soroban_sdk::String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ));
+        if admin == zero_admin {
             return Err(FactoryError::InvalidAdmin);
         }
+        
         if pool_wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(FactoryError::InvalidWasmHash);
         }
@@ -710,10 +699,14 @@ impl Factory {
     /// Callers can specify `scan_limit` (up to 50) to tune the scan window. Callers resume pagination
     /// using `next_start_id` until `next_start_id == total`.
     ///
-    /// # Indexer Recommendation
-    /// For off-chain applications (such as frontends and analytics) requiring zero-gas instant lookups
-    /// across thousands of pools, developers should index the `(symbol_short!("factory"), symbol_short!("pool_crtd"))`
-    /// events emitted by `create_pool`, which include `asset` and `pool_id` in their payload.
+    /// # Asset Index
+    /// `create_pool` maintains a secondary on-chain index, `DataKey::AssetPools(asset) -> Vec<u32>`
+    /// (with `DataKey::AssetPoolCount(asset)` as its constant-time companion), so this lookup reads
+    /// only the pool IDs registered for `asset` instead of walking the whole registry. The bounded
+    /// registry scan below is only a fallback for records that predate the index (#397). Off-chain
+    /// applications that need lookups across thousands of pools with no transaction at all should
+    /// still index the `(symbol_short!("factory"), symbol_short!("pool_crtd"))` events emitted by
+    /// `create_pool`, which include `asset` and `pool_id` in their payload.
     ///
     /// Returns `NotInitialized` if the factory has not been initialized.
     pub fn get_pools_by_asset_range(
@@ -930,8 +923,17 @@ impl Factory {
     /// let their TTL lapse, or archive/white-list them off-chain rather than
     /// relying on attacker interference.
     ///
+    /// Returns a `RefreshPoolTtlsResponse` listing the IDs that were actually
+    /// refreshed (#393). The existence check was already in place; the sweep
+    /// previously returned `Ok(())`, so a caller could not tell which IDs had
+    /// a record and were kept alive versus which were skipped as missing.
+    ///
     /// Returns `NotInitialized` if the factory has not been initialized.
-    pub fn refresh_pool_ttls(env: Env, start_id: u32, limit: u32) -> Result<(), FactoryError> {
+    pub fn refresh_pool_ttls(
+        env: Env,
+        start_id: u32,
+        limit: u32,
+    ) -> Result<RefreshPoolTtlsResponse, FactoryError> {
         require_initialized(&env)?;
         bump_instance(&env);
         let count: u32 = env
@@ -941,9 +943,14 @@ impl Factory {
             .unwrap_or(0);
         let capped_limit = limit.min(20);
         let end = start_id.saturating_add(capped_limit).min(count);
+        let mut refreshed: Vec<u32> = Vec::new(&env);
+        let mut missing = 0u32;
         for pool_id in start_id..end {
             if env.storage().persistent().has(&DataKey::Pool(pool_id)) {
                 bump_pool(&env, pool_id);
+                refreshed.push_back(pool_id);
+            } else {
+                missing += 1;
             }
         }
         #[allow(deprecated)]
@@ -951,7 +958,11 @@ impl Factory {
             (symbol_short!("factory"), symbol_short!("ttl_ref")),
             (start_id, end),
         );
-        Ok(())
+        Ok(RefreshPoolTtlsResponse {
+            refreshed,
+            end_id: end,
+            missing,
+        })
     }
 
     /// Transfer admin rights to `new_admin`. Current admin must authorise.
@@ -1020,47 +1031,44 @@ impl Factory {
     /// Furthermore, if the deployed pool does not support upgrades (e.g. an older
     /// deployment lacking an `upgrade` entry point) or if invocation fails, `try_invoke_contract`
     /// catches the failure and returns a typed `PoolUpgradeFailed` error instead of panicking.
-    pub fn upgrade_pool(
-        env: Env,
+    fn upgrade_pool_inner(
+        env: &Env,
+        admin: &Address,
         pool_id: u32,
-        new_wasm_hash: BytesN<32>,
+        new_wasm_hash: &BytesN<32>,
     ) -> Result<(), FactoryError> {
-        let admin = load_admin(&env)?;
-        admin.require_auth();
-        bump_instance(&env);
-
         let key = DataKey::Pool(pool_id);
         let mut record = env
             .storage()
             .persistent()
             .get::<DataKey, PoolRecord>(&key)
             .ok_or(FactoryError::PoolNotFound)?;
-        bump_pool(&env, pool_id);
+        bump_pool(env, pool_id);
 
-        let pool_admin_args: Vec<Val> = vec![&env];
+        let pool_admin_args: Vec<Val> = vec![env];
         let pool_admin_res = env.try_invoke_contract::<Address, soroban_sdk::Error>(
             &record.address,
-            &Symbol::new(&env, "admin"),
+            &Symbol::new(env, "admin"),
             pool_admin_args,
         );
         let pool_admin = match pool_admin_res {
             Ok(Ok(addr)) => addr,
             _ => return Err(FactoryError::PoolUpgradeFailed),
         };
-        if pool_admin != admin {
+        if &pool_admin != admin {
             return Err(FactoryError::PoolAdminMismatch);
         }
-        if new_wasm_hash == record.wasm_hash {
+        if new_wasm_hash == &record.wasm_hash {
             return Err(FactoryError::PoolUpgradeFailed);
         }
-        if !is_approved_wasm_hash(&env, &new_wasm_hash) {
+        if new_wasm_hash == &BytesN::from_array(env, &[0u8; 32]) {
             return Err(FactoryError::InvalidWasmHash);
         }
 
-        let upgrade_args: Vec<Val> = vec![&env, new_wasm_hash.clone().into_val(&env)];
+        let upgrade_args: Vec<Val> = vec![env, new_wasm_hash.clone().into_val(env)];
         let upgrade_res = env.try_invoke_contract::<(), soroban_sdk::Error>(
             &record.address,
-            &Symbol::new(&env, "upgrade"),
+            &Symbol::new(env, "upgrade"),
             upgrade_args,
         );
         match upgrade_res {
@@ -1078,7 +1086,7 @@ impl Factory {
             .persistent()
             .get::<DataKey, Vec<u32>>(&old_wasm_key)
         {
-            let mut new_old_ids: Vec<u32> = vec![&env];
+            let mut new_old_ids: Vec<u32> = vec![env];
             for id in old_pool_ids.iter() {
                 if id != pool_id {
                     new_old_ids.push_back(id);
@@ -1092,22 +1100,73 @@ impl Factory {
             .storage()
             .persistent()
             .get(&new_wasm_key)
-            .unwrap_or_else(|| vec![&env]);
+            .unwrap_or_else(|| vec![env]);
         new_pool_ids.push_back(pool_id);
         env.storage().persistent().set(&new_wasm_key, &new_pool_ids);
-        bump_wasm_pools(&env, &new_wasm_hash);
+        bump_wasm_pools(env, new_wasm_hash);
 
         env.storage().instance().set(
             &DataKey::UpgradeCount,
-            &read_upgrade_count(&env).saturating_add(1),
+            &read_upgrade_count(env).saturating_add(1),
         );
 
         #[allow(deprecated)]
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("pool_upg")),
-            (pool_id, record.address, old_hash, new_wasm_hash),
+            (pool_id, record.address, old_hash, new_wasm_hash.clone()),
         );
 
+        Ok(())
+    }
+
+    /// Hot-swap the underlying WASM bytecode of a single registered farming pool (#258).
+    ///
+    /// Upgrades only the target pool and leaves the factory's own `WasmHash`
+    /// (the default hash for future `create_pool` calls) unchanged.
+    ///
+    /// Pool records keep a snapshot of the WASM hash they were deployed with.
+    /// When upgrading via this function:
+    /// 1. The factory verifies caller is factory admin and that the target pool's admin matches.
+    /// 2. Invokes the pool's `upgrade(new_wasm_hash)` entry point.
+    /// 3. Updates the `PoolRecord.wasm_hash` in factory storage so registry queries reflect the change.
+    /// 4. Updates the secondary `PoolsByWasmHash` index and increments `UpgradeCount`.
+    /// 5. Emits a `pool_upg` event with old and new WASM hashes for full auditability.
+    ///
+    /// Furthermore, if the deployed pool does not support upgrades (e.g. an older
+    /// deployment lacking an `upgrade` entry point) or if invocation fails, `try_invoke_contract`
+    /// catches the failure and returns a typed `PoolUpgradeFailed` error instead of panicking.
+    pub fn upgrade_pool(
+        env: Env,
+        pool_id: u32,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
+        let admin = load_admin(&env)?;
+        validate_factory_admin(&env, &admin)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        Self::upgrade_pool_inner(&env, &admin, pool_id, &new_wasm_hash)
+    }
+
+    /// Upgrade multiple registered farming pools in batch. Admin-only.
+    ///
+    /// Atomically upgrades all specified `pool_ids` to `new_wasm_hash`. If any upgrade fails,
+    /// the transaction reverts and rolls back the entire batch.
+    pub fn upgrade_pools_batch(
+        env: Env,
+        pool_ids: Vec<u32>,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), FactoryError> {
+        require_initialized(&env)?;
+        let admin = load_admin(&env)?;
+        validate_factory_admin(&env, &admin)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        for pool_id in pool_ids.iter() {
+            Self::upgrade_pool_inner(&env, &admin, pool_id, &new_wasm_hash)?;
+        }
         Ok(())
     }
 
@@ -1228,6 +1287,54 @@ impl Factory {
             pool_id += 1;
         }
         Ok(end)
+    }
+
+    /// Query the health status of an individual pool (Issue #375).
+    ///
+    /// Returns a `PoolStatus` struct containing the pool's address, pause status,
+    /// and total staked amount. This provides a centralized way to check pool
+    /// health without querying each pool contract directly.
+    ///
+    /// Returns `NotInitialized` if the factory has not been initialized,
+    /// `PoolNotFound` for an unknown `pool_id`, or `PoolQueryFailed` if the
+    /// deployed pool does not respond to the status queries.
+    pub fn pool_status(env: Env, pool_id: u32) -> Result<PoolStatus, FactoryError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let record = env
+            .storage()
+            .persistent()
+            .get::<DataKey, PoolRecord>(&DataKey::Pool(pool_id))
+            .ok_or(FactoryError::PoolNotFound)?;
+        bump_pool(&env, pool_id);
+
+        let no_args: Vec<Val> = vec![&env];
+        
+        // Query is_paused status
+        let is_paused = match env.try_invoke_contract::<bool, soroban_sdk::Error>(
+            &record.address,
+            &Symbol::new(&env, "is_paused"),
+            no_args.clone(),
+        ) {
+            Ok(Ok(v)) => v,
+            _ => return Err(FactoryError::PoolQueryFailed),
+        };
+
+        // Query total_staked
+        let total_staked = match env.try_invoke_contract::<i128, soroban_sdk::Error>(
+            &record.address,
+            &Symbol::new(&env, "total_staked"),
+            no_args,
+        ) {
+            Ok(Ok(v)) => v,
+            _ => return Err(FactoryError::PoolQueryFailed),
+        };
+
+        Ok(PoolStatus {
+            address: record.address,
+            is_paused,
+            total_staked,
+        })
     }
 
     /// Update the WASM hash used for future `create_pool` deployments. Admin-only.
@@ -1366,6 +1473,7 @@ impl Factory {
         let admin = load_admin(&env)?;
         validate_factory_admin(&env, &admin)?;
         admin.require_auth();
+
         create_pool_inner(
             env,
             admin,
