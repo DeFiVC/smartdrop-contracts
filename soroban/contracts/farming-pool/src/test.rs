@@ -310,6 +310,26 @@ fn test_stake_overflowing_total_deposits_returns_typed_error_without_writing_sta
 }
 
 #[test]
+fn test_stake_overflowing_total_staked_returns_typed_error_without_writing_state() {
+    let t = setup(1, 1);
+    t.env.as_contract(&t.contract_id, || {
+        t.env
+            .storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &(i128::MAX - 50));
+    });
+
+    match t.client.try_stake(&t.user, &100i128) {
+        Err(Ok(PoolError::ExceedsMaxStake)) => {}
+        _ => panic!("expected PoolError::ExceedsMaxStake"),
+    }
+
+    assert!(t.client.get_stake(&t.user).is_none());
+    assert_eq!(t.client.total_staked(), i128::MAX - 50);
+    assert_eq!(t.client.total_deposits(), 0);
+}
+
+#[test]
 fn test_unstake_emits_event() {
     let t = setup(2, 1);
     let amount = 1_000i128;
