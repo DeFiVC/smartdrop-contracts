@@ -1903,7 +1903,7 @@ impl FarmingPool {
         // Validate funding before mutating the position.  Token transfers trap
         // when the caller is underfunded, but checking explicitly keeps the
         // contract API deterministic and avoids relying on token-specific trap
-        // messages for a normal validation failure.
+        // messages for a normal validation failure. See #460.
         let caller_balance = token::TokenClient::new(&env, &stake_token).balance(&from);
         if caller_balance < amount {
             return Err(PoolError::InsufficientBalance);
