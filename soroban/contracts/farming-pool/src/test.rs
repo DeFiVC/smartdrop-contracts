@@ -4353,3 +4353,105 @@ fn test_migrate_upgrades_schema_version_step_by_step() {
     assert_eq!(prev, 0);
     assert_eq!(t.client.schema_version(), 1);
 }
+
+// ── Feature improvements: #558, #559, #560, #561 ──────────────────────────────
+
+#[test]
+fn test_stake_token_getter() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.stake_token(), t.token.address);
+    assert_eq!(t.client.get_stake_token(), t.token.address);
+}
+
+#[test]
+fn test_granular_pause_getters() {
+    let t = setup(1, 10);
+
+    // Initially neither granular pause is active
+    assert_eq!(t.client.is_paused(), false);
+    assert_eq!(t.client.is_staking_paused(), false);
+    assert_eq!(t.client.is_withdrawals_paused(), false);
+
+    // Staking paused independently
+    t.client.pause_staking();
+    assert_eq!(t.client.is_staking_paused(), true);
+    assert_eq!(t.client.is_withdrawals_paused(), false);
+    assert_eq!(t.client.is_paused(), false);
+
+    t.client.unpause_staking();
+    assert_eq!(t.client.is_staking_paused(), false);
+
+    // Withdrawals paused independently
+    t.client.pause_withdrawals();
+    assert_eq!(t.client.is_staking_paused(), false);
+    assert_eq!(t.client.is_withdrawals_paused(), true);
+    assert_eq!(t.client.is_paused(), false);
+
+    t.client.unpause_withdrawals();
+    assert_eq!(t.client.is_withdrawals_paused(), false);
+
+    // Global pause sets both
+    t.client.pause();
+    assert_eq!(t.client.is_paused(), true);
+    assert_eq!(t.client.is_staking_paused(), true);
+    assert_eq!(t.client.is_withdrawals_paused(), true);
+
+    t.client.unpause();
+    assert_eq!(t.client.is_paused(), false);
+    assert_eq!(t.client.is_staking_paused(), false);
+    assert_eq!(t.client.is_withdrawals_paused(), false);
+}
+
+#[test]
+fn test_has_stake_lifecycle() {
+    let t = setup(1, 10);
+
+    // User initially has no stake
+    assert_eq!(t.client.has_stake(&t.user), false);
+
+    // User stakes
+    t.client.stake(&t.user, &1_000);
+    assert_eq!(t.client.has_stake(&t.user), true);
+
+    // Partial unstake leaves stake active
+    t.client.unstake(&t.user, &400);
+    assert_eq!(t.client.has_stake(&t.user), true);
+
+    // Full unstake removes active stake
+    t.client.unstake(&t.user, &600);
+    assert_eq!(t.client.has_stake(&t.user), false);
+}
+
+#[test]
+fn test_get_user_summary_aggregate() {
+    let t = setup_with_lock_period(1, 10, 50);
+
+    // Fresh user (not whitelisted initially)
+    let summary0 = t.client.get_user_summary(&t.user);
+    assert_eq!(summary0.staked_amount, 0);
+    assert_eq!(summary0.locked_amount, 0);
+    assert_eq!(summary0.total_credits, 0);
+    assert_eq!(summary0.boost_allocation, 0);
+    assert_eq!(summary0.is_whitelisted, false);
+    assert_eq!(summary0.unlock_ledger, 0);
+
+    // Add user to whitelist
+    t.client.add_to_whitelist(&t.user);
+
+    // User stakes flexible amount and configures boost
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &40);
+
+    // User locks position
+    t.client.lock_assets(&t.user, &500);
+
+    advance_ledgers(&t.env, 5);
+
+    let summary1 = t.client.get_user_summary(&t.user);
+    assert_eq!(summary1.staked_amount, 1_000);
+    assert_eq!(summary1.locked_amount, 500);
+    assert!(summary1.total_credits > 0);
+    assert_eq!(summary1.boost_allocation, 40);
+    assert_eq!(summary1.is_whitelisted, true);
+    assert!(summary1.unlock_ledger > 0);
+}
