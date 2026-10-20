@@ -4535,3 +4535,81 @@ fn test_get_peak_total_staked_survives_unstake() {
     assert_eq!(t.client.total_staked(), 400);
     assert_eq!(t.client.get_peak_total_staked(), 1_000);
 }
+
+// ── Feature improvements: #570, #571, #572, #573 ──────────────────────────────
+
+#[test]
+fn test_get_total_boost_allocation_sums_across_users() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.get_total_boost_allocation(), 0);
+
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &40);
+    assert_eq!(t.client.get_total_boost_allocation(), 40);
+
+    // Re-setting an existing allocation adjusts the total by the delta
+    t.client.set_boost(&t.user, &60);
+    assert_eq!(t.client.get_total_boost_allocation(), 60);
+
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &500_000i128);
+    t.client.stake(&user2, &1_000);
+    t.client.set_boost(&user2, &30);
+    assert_eq!(t.client.get_total_boost_allocation(), 90);
+}
+
+#[test]
+fn test_get_boost_user_count_counts_only_boosted_users() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.get_boost_user_count(), 0);
+
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &40);
+    assert_eq!(t.client.get_boost_user_count(), 1);
+
+    // Re-setting the same user's allocation does not count them twice
+    t.client.set_boost(&t.user, &60);
+    assert_eq!(t.client.get_boost_user_count(), 1);
+
+    // A staked user without a boost is not counted
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &500_000i128);
+    t.client.stake(&user2, &1_000);
+    assert_eq!(t.client.get_boost_user_count(), 1);
+
+    t.client.set_boost(&user2, &30);
+    assert_eq!(t.client.get_boost_user_count(), 2);
+}
+
+#[test]
+fn test_get_average_boost_allocation_rounds_down() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.get_average_boost_allocation(), 0);
+
+    t.client.stake(&t.user, &1_000);
+    t.client.set_boost(&t.user, &40);
+    assert_eq!(t.client.get_average_boost_allocation(), 40);
+
+    let user2 = Address::generate(&t.env);
+    t.token_sac.mint(&user2, &500_000i128);
+    t.client.stake(&user2, &1_000);
+    t.client.set_boost(&user2, &31);
+    // (40 + 31) / 2 = 35.5, rounded down to 35
+    assert_eq!(t.client.get_average_boost_allocation(), 35);
+}
+
+#[test]
+fn test_get_multiplier_change_ledger_tracks_last_change() {
+    let t = setup(1, 10);
+    assert_eq!(t.client.get_multiplier_change_ledger(), 0);
+
+    advance_ledgers(&t.env, 5);
+    let first_change = t.env.ledger().sequence();
+    t.client.set_global_multiplier(&2u32);
+    assert_eq!(t.client.get_multiplier_change_ledger(), first_change);
+
+    advance_ledgers(&t.env, 7);
+    let second_change = t.env.ledger().sequence();
+    t.client.set_global_multiplier(&3u32);
+    assert_eq!(t.client.get_multiplier_change_ledger(), second_change);
+}
