@@ -451,6 +451,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "PoolBalance"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "500"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "ReentrantUser"
                           }
                         ]

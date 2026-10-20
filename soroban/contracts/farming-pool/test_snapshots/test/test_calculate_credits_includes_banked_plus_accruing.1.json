@@ -443,7 +443,7 @@
                       "symbol": "lock_ledger"
                     },
                     "val": {
-                      "u32": 0
+                      "u32": 10
                     }
                   },
                   {

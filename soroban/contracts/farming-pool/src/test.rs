@@ -329,6 +329,169 @@ fn test_stake_overflowing_total_staked_returns_typed_error_without_writing_state
     assert_eq!(t.client.total_deposits(), 0);
 }
 
+// ── stake validation ordering / single-source-of-truth / token interface
+// (#456, #457, #458, #459) ───────────────────────────────────────────────────
+
+use crate::mock_fee_token::{MockFeeToken, MockFeeTokenClient};
+use crate::mock_reentrant_token::{MockReentrantToken, MockReentrantTokenClient};
+
+/// #456: every pool-invariant check must be decided before the first
+/// cross-contract call. `balance` runs the stake token's own code, so a
+/// rejection that only happens afterwards gives hostile token code a window
+/// in which the pool's validation sequence has already touched (or queried
+/// around) live state.
+#[test]
+fn test_stake_overflowing_total_staked_is_rejected_before_querying_the_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+
+    let token_id = env.register(MockReentrantToken, ());
+    let token_client = MockReentrantTokenClient::new(&env, &token_id);
+    token_client.configure(&farming_pool_id, &user);
+
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    env.as_contract(&farming_pool_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &(i128::MAX - 50));
+    });
+
+    assert_eq!(
+        client.try_stake(&user, &100i128),
+        Err(Ok(PoolError::ExceedsMaxStake))
+    );
+    // The stake token's `balance` never ran — the pool's own invariant was
+    // settled before any of the token's code was invoked.
+    assert_eq!(token_client.balance_call_count(), 0);
+    assert!(client.get_stake(&user).is_none());
+}
+
+/// #457: the total that passes the minimum/cap checks is the total that gets
+/// persisted — one read, one source of truth, and a rejection writes nothing.
+#[test]
+fn test_stake_topup_persists_exactly_the_validated_total() {
+    let t = setup(2, 1);
+    t.client.stake(&t.user, &100i128);
+
+    // The minimum applies to the *resulting* position, and the resulting
+    // position is exactly what lands in storage.
+    t.client.set_min_stake_amount(&150);
+    t.client.stake(&t.user, &50i128);
+
+    let stake = t.client.get_stake(&t.user).unwrap();
+    assert_eq!(stake.amount, 150);
+    assert_eq!(t.client.total_staked(), 150);
+    assert_eq!(t.client.total_deposits(), 150);
+
+    // A top-up rejected against that same total leaves the record untouched.
+    t.client.set_min_stake_amount(&200);
+    assert_eq!(
+        t.client.try_stake(&t.user, &1i128),
+        Err(Ok(PoolError::BelowMinimumStake))
+    );
+    let stake = t.client.get_stake(&t.user).unwrap();
+    assert_eq!(stake.amount, 150);
+    assert_eq!(t.client.total_staked(), 150);
+    assert_eq!(t.client.total_deposits(), 150);
+}
+
+/// #458: a stake token that does not deliver the full deposit (fee-on-transfer
+/// / deflationary) must not leave a stake credited against tokens the pool
+/// never received — the last withdrawers would otherwise be unable to exit.
+#[test]
+fn test_stake_rejects_deposit_not_delivered_in_full() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let token_id = env.register(MockFeeToken, ());
+    let token = MockFeeTokenClient::new(&env, &token_id);
+    token.mint(&user, &1_000_000i128);
+    token.set_fee_bps(&100); // 1% skimmed per transfer
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+    client.initialize(&admin, &token_id, &2u32, &100i128, &0u32, &0i128);
+
+    assert_eq!(
+        client.try_stake(&user, &1_000i128),
+        Err(Ok(PoolError::TransferAmountMismatch))
+    );
+
+    // The whole invocation reverted — position, accounting and tokens alike.
+    assert!(client.get_stake(&user).is_none());
+    assert_eq!(client.total_staked(), 0);
+    assert_eq!(client.total_deposits(), 0);
+    assert_eq!(token.balance(&user), 1_000_000);
+    assert_eq!(token.balance(&farming_pool_id), 0);
+
+    // A token that delivers nothing at all fails the same check.
+    token.set_fee_bps(&10_000);
+    assert_eq!(
+        client.try_stake(&user, &1_000i128),
+        Err(Ok(PoolError::TransferAmountMismatch))
+    );
+    assert!(client.get_stake(&user).is_none());
+    assert_eq!(token.balance(&farming_pool_id), 0);
+}
+
+/// #459: a misconfigured `stake_token` — an address with no code, or a
+/// contract without a token interface — is a typed configuration error, not
+/// a host trap.
+#[test]
+fn test_stake_rejects_stake_token_that_does_not_answer_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let not_a_token = Address::generate(&env);
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+    client.initialize(&admin, &not_a_token, &2u32, &100i128, &0u32, &0i128);
+
+    assert_eq!(
+        client.try_stake(&user, &100i128),
+        Err(Ok(PoolError::InvalidStakeToken))
+    );
+    assert!(client.get_stake(&user).is_none());
+    assert_eq!(client.total_staked(), 0);
+    assert_eq!(client.total_deposits(), 0);
+}
+
+#[test]
+fn test_stake_rejects_stake_token_without_token_interface() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    // A live contract that simply has no `balance` entry point.
+    let not_a_token = env.register(FarmingPool, ());
+
+    let farming_pool_id = env.register(FarmingPool, ());
+    let client = FarmingPoolClient::new(&env, &farming_pool_id);
+    client.initialize(&admin, &not_a_token, &2u32, &100i128, &0u32, &0i128);
+
+    assert_eq!(
+        client.try_stake(&user, &100i128),
+        Err(Ok(PoolError::InvalidStakeToken))
+    );
+    assert!(client.get_stake(&user).is_none());
+    assert_eq!(client.total_staked(), 0);
+}
+
 #[test]
 fn test_unstake_emits_event() {
     let t = setup(2, 1);
@@ -2770,10 +2933,7 @@ fn test_set_min_stake_amount() {
 // These tests exercise both realistic reentrant-token shapes and confirm
 // the CEI reordering fix doesn't change correct-path behavior.
 
-use crate::mock_reentrant_token::{
-    MockNaiveReentrantToken, MockNaiveReentrantTokenClient, MockReentrantToken,
-    MockReentrantTokenClient,
-};
+use crate::mock_reentrant_token::{MockNaiveReentrantToken, MockNaiveReentrantTokenClient};
 
 extern crate std;
 

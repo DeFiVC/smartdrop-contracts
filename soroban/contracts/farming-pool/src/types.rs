@@ -35,6 +35,15 @@ pub enum PoolError {
     ExceedsMaxStake = 18,
     /// Returned when `set_min_lock_period` exceeds `MAX_LOCK_PERIOD`.
     InvalidLockPeriod = 19,
+    /// Returned by `stake` when the configured stake token does not answer a
+    /// `balance` query — the address is not a deployed contract, or it has no
+    /// token interface. See #459.
+    InvalidStakeToken = 20,
+    /// Returned by `stake` when the stake token did not deliver the full
+    /// deposit into the pool (fee-on-transfer / under-delivering token), so
+    /// crediting `amount` would leave the pool short of its own liabilities.
+    /// See #458.
+    TransferAmountMismatch = 21,
 }
 
 /// Per-user boost configuration returned by `get_boost_config`.
