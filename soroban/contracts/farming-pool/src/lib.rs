@@ -1915,10 +1915,21 @@ impl FarmingPool {
             .checked_add(amount)
             .ok_or(PoolError::ExceedsMaxStake)?;
 
-        // Re-use the already-fetched stake record rather than hitting storage a
-        // second time. `total_amount` was validated above via `checked_add`;
-        // re-deriving it here would be redundant and could diverge. See #461.
-        let mut existing_stake = get_user_stake(&env, &from);
+        // Reject before any write if the pool-wide total staked would overflow;
+        // `add_total_staked` would otherwise trap via `expect`. See #484, #485.
+        read_total_staked(&env)
+            .checked_add(amount)
+            .ok_or(PoolError::ExceedsMaxStake)?;
+
+        let mut existing_stake = env
+            .storage()
+            .persistent()
+            .get::<DataKey, UserStake>(&DataKey::UserStake(from.clone()));
+        let new_amount = existing_stake
+            .as_ref()
+            .map_or(Some(amount), |stake| stake.amount.checked_add(amount))
+            .filter(|total| *total <= MAX_STAKE_AMOUNT)
+            .ok_or(PoolError::ExceedsMaxStake)?;
 
         bump_instance(&env);
 
@@ -1928,7 +1939,7 @@ impl FarmingPool {
         let mut new_stake = if let Some(mut existing) = existing_stake.take() {
             bump_user(&env, &DataKey::UserStake(from.clone()));
             checkpoint(&env, &from, &mut existing);
-            existing.amount = total_amount;
+            existing.amount = new_amount;
             existing
         } else {
             UserStake {
