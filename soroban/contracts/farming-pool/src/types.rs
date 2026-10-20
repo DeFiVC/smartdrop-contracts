@@ -438,6 +438,14 @@ pub struct DistributionEvent {
     pub ledger: u32,
 }
 
+/// Paginated response for distribution history queries (Issue #566).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DistributionHistoryPage {
+    pub events: Vec<DistributionEvent>,
+    pub total: u32,
+}
+
 // ── Feature 4: Extended Pool Analytics (Issue #557) ──────────────────────────
 
 /// Extended analytics snapshot for pool health monitoring.
