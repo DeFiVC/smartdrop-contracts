@@ -184,4 +184,8 @@ pub enum FactoryError {
     /// deployed from an older WASM that predates it).
     PoolQueryFailed = 17,
     SameWasmHash = 18,
+    /// `create_pool`'s minimum lock period exceeds the maximum allowed
+    /// threshold, which would trap staked funds for an effectively permanent
+    /// window.
+    MinLockPeriodAboveCeiling = 19,
 }

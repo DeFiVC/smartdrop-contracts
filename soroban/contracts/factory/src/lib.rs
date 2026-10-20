@@ -29,6 +29,11 @@ const MIN_STAKE_AMOUNT: i128 = 1_000_000;
 const MAX_STAKE_AMOUNT: i128 = 10i128.pow(18);
 // Minimum lock period in ledgers required to prevent flash-loan-style attacks.
 const MIN_LOCK_PERIOD: u32 = 1;
+// Maximum lock period in ledgers, mirroring the farming pool's own
+// `MAX_LOCK_PERIOD` so an effectively permanent lock is caught before pool
+// deployment (#532-#535).
+// 10 years at 5s/ledger.
+const MAX_MIN_LOCK_PERIOD: u32 = 63_072_000;
 // Maximum global multiplier, mirroring the farming pool's own limit so an
 // invalid multiplier is caught before pool deployment (#494).
 const MAX_GLOBAL_MULTIPLIER: u32 = 1_000;
@@ -349,6 +354,9 @@ fn create_pool_inner(
         .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
     if min_lock_period < MIN_LOCK_PERIOD {
         return Err(FactoryError::MinLockPeriodTooShort);
+    }
+    if min_lock_period > MAX_MIN_LOCK_PERIOD {
+        return Err(FactoryError::MinLockPeriodAboveCeiling);
     }
     let effective_min_stake = if min_stake_amount <= 0 {
         MIN_STAKE_AMOUNT

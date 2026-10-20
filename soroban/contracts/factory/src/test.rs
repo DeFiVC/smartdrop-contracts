@@ -1322,6 +1322,35 @@ fn test_create_pool_rejects_min_lock_period_out_of_u32_range() {
 }
 
 #[test]
+fn test_create_pool_rejects_min_lock_period_above_ceiling() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    let above_ceiling = (MAX_MIN_LOCK_PERIOD as u64) + 1;
+    let result = t
+        .client
+        .try_create_pool(&asset, &1_728_000u128, &2u32, &above_ceiling, &0i128);
+    assert_eq!(result, Err(Ok(FactoryError::MinLockPeriodAboveCeiling)));
+    assert_eq!(t.client.pool_count(), 0);
+}
+
+#[test]
+fn test_create_pool_accepts_min_lock_period_exactly_at_ceiling() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    let pool_id = t.client.create_pool(
+        &asset,
+        &1_728_000u128,
+        &2u32,
+        &(MAX_MIN_LOCK_PERIOD as u64),
+        &0i128,
+    );
+    let record = t.client.get_pool(&pool_id);
+    assert_eq!(record.min_lock_period, MAX_MIN_LOCK_PERIOD);
+}
+
+#[test]
 fn test_create_pool_rejects_non_token_asset() {
     let t = setup();
     // A bare generated address is not a deployed SEP-41 token contract, so it
