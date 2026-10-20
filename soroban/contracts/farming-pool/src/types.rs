@@ -236,6 +236,28 @@ pub struct PoolInfo {
     pub is_paused: bool,
 }
 
+/// Consolidated user account overview returned by `get_user_summary` (Feature 8 improvement, Issue #561).
+///
+/// Bundles a user's flexible stake amount, locked position amount, cumulative accrued credits,
+/// active boost allocation percentage, whitelist authorization status, and earliest position
+/// unlock ledger into a single read-only query.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserSummary {
+    /// Amount of tokens currently staked in flexible staking.
+    pub staked_amount: i128,
+    /// Amount of tokens currently locked in time-locked position.
+    pub locked_amount: i128,
+    /// Total accrued credits across flexible, locked, and banked credits.
+    pub total_credits: i128,
+    /// Current boost allocation percentage (0-100).
+    pub boost_allocation: u32,
+    /// Whether user is whitelisted (or if whitelist is disabled).
+    pub is_whitelisted: bool,
+    /// Ledger at which the locked position unlocks (or 0 if none).
+    pub unlock_ledger: u32,
+}
+
 // ─── History / audit trail types ─────────────────────────────────────────────
 
 /// A single whitelist change event (add or remove).

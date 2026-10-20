@@ -10,7 +10,7 @@ mod types;
 use soroban_sdk::{
     contract, contractimpl, symbol_short, token, Address, BytesN, Env, Executable, Vec,
 };
-pub use types::{PoolError, PoolInfo};
+pub use types::{PoolError, PoolInfo, UserSummary};
 use types::{
     AdminActionEvent, AdminActionHistoryPage, BankedCreditTotals, BoostConfig, BoostEvent,
     BoostHistoryPage, CreditRateEvent, CreditRateHistoryPage, DataKey, GlobalMultiplierEvent,
@@ -1025,6 +1025,18 @@ impl FarmingPool {
         get_admin(&env)
     }
 
+    /// Return the stake token address configured for the pool (#558).
+    pub fn stake_token(env: Env) -> Result<Address, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        get_stake_token(&env)
+    }
+
+    /// Alias for `stake_token` for consistency with getter conventions (#558).
+    pub fn get_stake_token(env: Env) -> Result<Address, PoolError> {
+        Self::stake_token(env)
+    }
+
     /// Propose an admin handoff. The proposed admin must separately call
     /// `accept_admin` and authorise the call before the handoff completes.
     ///
@@ -1456,6 +1468,17 @@ impl FarmingPool {
         Ok(get_position(&env, &user).is_some())
     }
 
+    /// Lightweight check for whether `user` has an active flexible stake (#560).
+    ///
+    /// Returns `true` if the user has an active flexible stake, `false`
+    /// otherwise. This is cheaper than `get_stake` as it avoids computing
+    /// uncommitted credit accrual and allocating the `UserStake` struct.
+    pub fn has_stake(env: Env, user: Address) -> Result<bool, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(get_user_stake(&env, &user).is_some())
+    }
+
     pub fn pause(env: Env) -> Result<(), PoolError> {
         require_initialized(&env)?;
         let admin = get_admin(&env)?;
@@ -1544,6 +1567,20 @@ impl FarmingPool {
         require_initialized(&env)?;
         bump_instance(&env);
         Ok(pool_is_paused(&env))
+    }
+
+    /// Return whether staking operations are currently paused (#559).
+    pub fn is_staking_paused(env: Env) -> Result<bool, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(pool_is_staking_paused(&env))
+    }
+
+    /// Return whether withdrawal operations are currently paused (#559).
+    pub fn is_withdrawals_paused(env: Env) -> Result<bool, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(pool_is_withdrawals_paused(&env))
     }
 
     /// Withdraw staked/locked tokens during emergency when pool is paused.
@@ -2515,6 +2552,36 @@ impl FarmingPool {
                 .get(&DataKey::MinStakeAmount)
                 .unwrap_or(1),
             is_paused: pool_is_paused(&env),
+        })
+    }
+
+    /// Return a consolidated overview of `user`'s account state across all pool features (#561).
+    ///
+    /// Aggregates flexible stake balance, time-locked position amount, cumulative accrued credits,
+    /// boost allocation percentage, whitelist authorization, and unlock ledger in a single call.
+    pub fn get_user_summary(env: Env, user: Address) -> Result<UserSummary, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        let staked_amount = get_user_stake(&env, &user)
+            .map(|s| s.amount)
+            .unwrap_or(0);
+
+        let (locked_amount, unlock_ledger) = get_position(&env, &user)
+            .map(|p| (p.amount, p.unlock_ledger))
+            .unwrap_or((0, 0));
+
+        let total_credits = Self::get_credits(env.clone(), user.clone())?;
+        let boost_allocation = get_user_boost(&env, &user).unwrap_or(0);
+        let is_whitelisted = is_user_whitelisted(&env, &user);
+
+        Ok(UserSummary {
+            staked_amount,
+            locked_amount,
+            total_credits,
+            boost_allocation,
+            is_whitelisted,
+            unlock_ledger,
         })
     }
 
