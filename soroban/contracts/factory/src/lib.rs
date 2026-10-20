@@ -317,10 +317,33 @@ fn create_pool_inner(
 
     validate_asset(&env, &asset)?;
 
-    if global_multiplier < 1 || global_multiplier > MAX_GLOBAL_MULTIPLIER {
+    // Validation 23: Ensure asset address is not zero/null
+    let zero_addr = Address::from_string(&String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    if asset == zero_addr {
+        return Err(FactoryError::InvalidAsset);
+    }
+
+    // Validation 24: Ensure global_multiplier is strictly within bounds
+    // Must be at least 1 and at most MAX_GLOBAL_MULTIPLIER (1000)
+    if global_multiplier < 1 {
         return Err(FactoryError::InvalidGlobalMultiplier);
     }
+    if global_multiplier > MAX_GLOBAL_MULTIPLIER {
+        return Err(FactoryError::InvalidGlobalMultiplier);
+    }
+
+    // Validation 25: Convert and validate daily_rate with strict bounds checking
     let credit_rate = daily_rate_to_credit_rate(daily_rate)?;
+
+    // Validation 26: Ensure daily_rate doesn't cause overflow when converted
+    // and that the resulting credit_rate doesn't exceed protocol limits
+    if credit_rate <= 0 || credit_rate > MAX_CREDIT_RATE {
+        return Err(FactoryError::InvalidCreditRate);
+    }
+
     let min_lock_period: u32 = min_lock_period
         .try_into()
         .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
