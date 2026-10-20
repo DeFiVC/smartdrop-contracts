@@ -1901,12 +1901,23 @@ impl FarmingPool {
         // a missing token config fails without touching the position. See #450, #451.
         let stake_token = get_stake_token(&env)?;
 
+        let mut existing_stake = env
+            .storage()
+            .persistent()
+            .get::<DataKey, UserStake>(&DataKey::UserStake(from.clone()));
+        let new_amount = existing_stake
+            .as_ref()
+            .map_or(Some(amount), |stake| stake.amount.checked_add(amount))
+            .filter(|total| *total <= MAX_STAKE_AMOUNT)
+            .ok_or(PoolError::ExceedsMaxStake)?;
+
         bump_instance(&env);
 
-        let is_first_stake = get_user_stake(&env, &from).is_none();
+        let is_first_stake = existing_stake.is_none();
         let was_staked = is_user_staked(&env, &from);
         let current = env.ledger().sequence();
-        let mut new_stake = if let Some(mut existing) = get_user_stake(&env, &from) {
+        let mut new_stake = if let Some(mut existing) = existing_stake.take() {
+            bump_user(&env, &DataKey::UserStake(from.clone()));
             checkpoint(&env, &from, &mut existing);
             existing.amount = total_amount;
             existing
