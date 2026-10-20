@@ -56,6 +56,12 @@ impl MockReentrantToken {
             .set(&DataKey::ReentrantCall, &(function, args));
     }
 
+    /// `stake` checks the caller's balance before pulling funds. Report an
+    /// effectively unlimited balance so these mocks still reach `transfer`.
+    pub fn balance(_env: Env, _id: Address) -> i128 {
+        i128::MAX
+    }
+
     /// Matches the token interface's `transfer(from, to, amount)` exactly —
     /// this is the only function `token::TokenClient::transfer` invokes.
     pub fn transfer(env: Env, _from: Address, _to: Address, _amount: i128) {
@@ -124,6 +130,11 @@ impl MockNaiveReentrantToken {
         env.storage()
             .instance()
             .set(&DataKey::ReentrantCall, &(function, args));
+    }
+
+    /// See [`MockReentrantToken::balance`].
+    pub fn balance(_env: Env, _id: Address) -> i128 {
+        i128::MAX
     }
 
     pub fn transfer(env: Env, _from: Address, _to: Address, _amount: i128) {
