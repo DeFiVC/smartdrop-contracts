@@ -1286,6 +1286,30 @@ fn test_create_pool_rejects_global_multiplier_below_one() {
 }
 
 #[test]
+fn test_create_pool_rejects_global_multiplier_above_max() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    let result = t
+        .client
+        .try_create_pool(&asset, &1_728_000u128, &1_001u32, &25u64, &0i128);
+    assert_eq!(result, Err(Ok(FactoryError::InvalidGlobalMultiplier)));
+}
+
+#[test]
+fn test_create_pool_rejects_daily_rate_exceeding_max_credit_rate() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    // 100_000_001 * 17_280 yields credit_rate 100_000_001, exceeding MAX_CREDIT_RATE (100_000_000).
+    let excessive_daily_rate = 100_000_001u128 * 17_280u128;
+    let result = t
+        .client
+        .try_create_pool(&asset, &excessive_daily_rate, &2u32, &25u64, &0i128);
+    assert_eq!(result, Err(Ok(FactoryError::InvalidCreditRate)));
+}
+
+#[test]
 fn test_create_pool_rejects_min_lock_period_out_of_u32_range() {
     let t = setup();
     let asset = test_asset(&t.env);
