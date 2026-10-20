@@ -32,7 +32,8 @@ const MIN_LOCK_PERIOD: u32 = 1;
 // Maximum lock period in ledgers, mirroring the farming pool's own
 // `MAX_LOCK_PERIOD` so an effectively permanent lock is caught before pool
 // deployment (#532-#535).
-const MAX_MIN_LOCK_PERIOD: u32 = 63_072_000; // 10 years at 5s/ledger
+// 10 years at 5s/ledger.
+const MAX_MIN_LOCK_PERIOD: u32 = 63_072_000;
 // Maximum global multiplier, mirroring the farming pool's own limit so an
 // invalid multiplier is caught before pool deployment (#494).
 const MAX_GLOBAL_MULTIPLIER: u32 = 1_000;
