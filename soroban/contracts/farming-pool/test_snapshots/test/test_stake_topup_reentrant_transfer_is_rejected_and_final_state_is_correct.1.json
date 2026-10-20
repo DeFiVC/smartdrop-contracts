@@ -433,6 +433,30 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "BalanceCallCount"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 3
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "PoolBalance"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "200"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "ReentrantCall"
                           }
                         ]

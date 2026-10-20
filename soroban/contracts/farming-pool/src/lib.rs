@@ -2,6 +2,8 @@
 #![allow(deprecated)]
 
 #[cfg(test)]
+mod mock_fee_token;
+#[cfg(test)]
 mod mock_reentrant_token;
 mod types;
 
@@ -247,6 +249,13 @@ fn remove_user_stake(env: &Env, user: &Address) {
         }
     }
     set_staked_users_list(env, &new_users);
+}
+
+fn read_total_staked(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalStaked)
+        .unwrap_or(0)
 }
 
 fn add_total_staked(env: &Env, amount: i128) {
@@ -1881,12 +1890,18 @@ impl FarmingPool {
             return Err(PoolError::NotWhitelisted);
         }
 
-        // Validate the resulting position, not just the delta, before any state
-        // is touched. Matches `lock_assets`: the minimum and cap apply to the
-        // caller's total stake, and overflow returns `ExceedsMaxStake` instead
-        // of trapping. See #448, #449.
-        let existing_amount = get_user_stake(&env, &from).map_or(0i128, |s| s.amount);
-        let total_amount = existing_amount
+        // Fetch the caller's stake record once, and validate the position this
+        // call will write — not just the delta. Matches `lock_assets`: the
+        // minimum and cap apply to the caller's *resulting* total stake, and
+        // overflow returns `ExceedsMaxStake` instead of trapping. That single
+        // read is reused for the write below, so the value that passed
+        // validation is exactly the value that gets persisted: no second
+        // storage read (and no re-derived total) sits between the checks and
+        // the effects. See #448, #449, #457.
+        let mut existing_stake = get_user_stake(&env, &from);
+        let total_amount = existing_stake
+            .as_ref()
+            .map_or(0i128, |stake| stake.amount)
             .checked_add(amount)
             .ok_or(PoolError::ExceedsMaxStake)?;
         let min_stake = Self::get_min_stake_amount(env.clone())?;
@@ -1895,18 +1910,6 @@ impl FarmingPool {
         }
         if total_amount > MAX_STAKE_AMOUNT {
             return Err(PoolError::ExceedsMaxStake);
-        }
-
-        // Resolve the stake token before checkpointing or writing any state, so
-        // a missing token config fails without touching the position. See #450, #451.
-        let stake_token = get_stake_token(&env)?;
-        // Validate funding before mutating the position.  Token transfers trap
-        // when the caller is underfunded, but checking explicitly keeps the
-        // contract API deterministic and avoids relying on token-specific trap
-        // messages for a normal validation failure. See #460.
-        let caller_balance = token::TokenClient::new(&env, &stake_token).balance(&from);
-        if caller_balance < amount {
-            return Err(PoolError::InsufficientBalance);
         }
 
         // Reject before any write if the pool-wide deposit total would overflow;
@@ -1921,15 +1924,28 @@ impl FarmingPool {
             .checked_add(amount)
             .ok_or(PoolError::ExceedsMaxStake)?;
 
-        let mut existing_stake = env
-            .storage()
-            .persistent()
-            .get::<DataKey, UserStake>(&DataKey::UserStake(from.clone()));
-        let new_amount = existing_stake
-            .as_ref()
-            .map_or(Some(amount), |stake| stake.amount.checked_add(amount))
-            .filter(|total| *total <= MAX_STAKE_AMOUNT)
-            .ok_or(PoolError::ExceedsMaxStake)?;
+        // Resolve the stake token before checkpointing or writing any state, so
+        // a missing token config fails without touching the position. See #450, #451.
+        let stake_token = get_stake_token(&env)?;
+        let token_client = token::TokenClient::new(&env, &stake_token);
+        // Validate funding before mutating the position.  Token transfers trap
+        // when the caller is underfunded, but checking explicitly keeps the
+        // contract API deterministic and avoids relying on token-specific trap
+        // messages for a normal validation failure. A configured `stake_token`
+        // that cannot answer `balance` at all — a misconfigured address, or a
+        // contract without a token interface — is likewise reported as a typed
+        // error instead of a host failure. See #453, #460, #459.
+        //
+        // Every local check above now runs before this first cross-contract
+        // call: `balance` executes the stake token's own code, so it must not
+        // run while a pool invariant could still reject the stake. See #456.
+        let caller_balance = match token_client.try_balance(&from) {
+            Ok(Ok(balance)) => balance,
+            _ => return Err(PoolError::InvalidStakeToken),
+        };
+        if caller_balance < amount {
+            return Err(PoolError::InsufficientBalance);
+        }
 
         bump_instance(&env);
 
@@ -1937,9 +1953,8 @@ impl FarmingPool {
         let was_staked = is_user_staked(&env, &from);
         let current = env.ledger().sequence();
         let mut new_stake = if let Some(mut existing) = existing_stake.take() {
-            bump_user(&env, &DataKey::UserStake(from.clone()));
             checkpoint(&env, &from, &mut existing);
-            existing.amount = new_amount;
+            existing.amount = total_amount;
             existing
         } else {
             UserStake {
@@ -1965,12 +1980,19 @@ impl FarmingPool {
         add_total_staked(&env, amount);
         add_total_deposits(&env, amount);
 
-        // Pull tokens from caller into the contract.
-        token::TokenClient::new(&env, &stake_token).transfer(
-            &from,
-            env.current_contract_address(),
-            &amount,
-        );
+        // Pull tokens from caller into the contract, then verify the pool
+        // actually received the full amount before the stake is left standing.
+        // The position, `total_staked` and `total_deposits` all credit `amount`,
+        // so a stake token that skims a fee (fee-on-transfer) or otherwise
+        // under-delivers would leave the pool short of its own liabilities and
+        // strand later withdrawers. Rejecting here reverts the whole
+        // invocation, the transfer included. See #458.
+        let pool_before = token_client.balance(&env.current_contract_address());
+        token_client.transfer(&from, env.current_contract_address(), &amount);
+        let pool_after = token_client.balance(&env.current_contract_address());
+        if pool_after.checked_sub(pool_before).unwrap_or(0) < amount {
+            return Err(PoolError::TransferAmountMismatch);
+        }
 
         env.events().publish(
             (symbol_short!("pool"), symbol_short!("staked")),
@@ -2418,11 +2440,7 @@ impl FarmingPool {
     pub fn total_staked(env: Env) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
-        Ok(env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalStaked)
-            .unwrap_or(0))
+        Ok(read_total_staked(&env))
     }
 
     /// Return the cumulative number of credits distributed to all users since

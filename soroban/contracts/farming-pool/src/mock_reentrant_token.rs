@@ -26,6 +26,47 @@ enum DataKey {
     /// `transfer` falls back to calling `get_user_position(reentrant_user)`,
     /// preserving every existing caller's behavior unchanged.
     ReentrantCall,
+    /// Number of `balance` queries this token has received, so a test can
+    /// assert that the pool finished every local check before any of this
+    /// contract's code ran (#456).
+    BalanceCallCount,
+    /// Balance attributed to the target pool by `transfer`, so `stake`'s
+    /// received-amount check (#458) sees the deposit actually land.
+    PoolBalance,
+}
+
+/// Shared bookkeeping for both mock tokens: count every `balance` query, and
+/// report the pool's own balance (tracked by `transfer`) to the pool while
+/// reporting an effectively unlimited balance to everybody else.
+fn record_balance_call(env: &Env, id: &Address) -> i128 {
+    let count: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::BalanceCallCount)
+        .unwrap_or(0);
+    env.storage()
+        .instance()
+        .set(&DataKey::BalanceCallCount, &(count + 1));
+    let target: Option<Address> = env.storage().instance().get(&DataKey::Target);
+    if target.as_ref() == Some(id) {
+        return env
+            .storage()
+            .instance()
+            .get(&DataKey::PoolBalance)
+            .unwrap_or(0);
+    }
+    i128::MAX
+}
+
+fn credit_pool(env: &Env, amount: i128) {
+    let pool_balance: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::PoolBalance)
+        .unwrap_or(0);
+    env.storage()
+        .instance()
+        .set(&DataKey::PoolBalance, &(pool_balance + amount));
 }
 
 #[contract]
@@ -57,14 +98,27 @@ impl MockReentrantToken {
     }
 
     /// `stake` checks the caller's balance before pulling funds. Report an
-    /// effectively unlimited balance so these mocks still reach `transfer`.
-    pub fn balance(_env: Env, _id: Address) -> i128 {
-        i128::MAX
+    /// effectively unlimited balance so these mocks still reach `transfer`;
+    /// the pool itself is reported the balance `transfer` credited to it.
+    pub fn balance(env: Env, id: Address) -> i128 {
+        record_balance_call(&env, &id)
+    }
+
+    /// How many times `balance` has been queried — lets a test prove the
+    /// pool ran every local check before calling out to this token (#456).
+    pub fn balance_call_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::BalanceCallCount)
+            .unwrap_or(0)
     }
 
     /// Matches the token interface's `transfer(from, to, amount)` exactly —
     /// this is the only function `token::TokenClient::transfer` invokes.
-    pub fn transfer(env: Env, _from: Address, _to: Address, _amount: i128) {
+    pub fn transfer(env: Env, _from: Address, _to: Address, amount: i128) {
+        // Deliver the deposit in full so `stake`'s received-amount check
+        // (#458) passes; this mock's purpose is reentry, not mis-delivery.
+        credit_pool(&env, amount);
         let target: Address = env.storage().instance().get(&DataKey::Target).unwrap();
         let (function, args): (Symbol, Vec<Val>) = match env
             .storage()
@@ -133,11 +187,21 @@ impl MockNaiveReentrantToken {
     }
 
     /// See [`MockReentrantToken::balance`].
-    pub fn balance(_env: Env, _id: Address) -> i128 {
-        i128::MAX
+    pub fn balance(env: Env, id: Address) -> i128 {
+        record_balance_call(&env, &id)
     }
 
-    pub fn transfer(env: Env, _from: Address, _to: Address, _amount: i128) {
+    /// See [`MockReentrantToken::balance_call_count`].
+    pub fn balance_call_count(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::BalanceCallCount)
+            .unwrap_or(0)
+    }
+
+    pub fn transfer(env: Env, _from: Address, _to: Address, amount: i128) {
+        // See [`MockReentrantToken::transfer`] — deliver the deposit in full.
+        credit_pool(&env, amount);
         let target: Address = env.storage().instance().get(&DataKey::Target).unwrap();
         let (function, args): (Symbol, Vec<Val>) = match env
             .storage()

@@ -447,6 +447,18 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "PoolBalance"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "i128": "800"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "ReentrantCall"
                           }
                         ]
