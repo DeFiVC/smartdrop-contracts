@@ -163,6 +163,80 @@ fn test_stake_uninitialized_returns_not_initialized() {
 }
 
 #[test]
+fn test_stake_rejects_invalid_amounts() {
+    let t = setup(2, 1);
+
+    assert_eq!(
+        t.client.try_stake(&t.user, &0i128),
+        Err(Ok(PoolError::InvalidAmount))
+    );
+    assert_eq!(
+        t.client.try_stake(&t.user, &-1i128),
+        Err(Ok(PoolError::InvalidAmount))
+    );
+    assert_eq!(
+        t.client.try_stake(&t.user, &1i128),
+        Err(Ok(PoolError::BelowMinimumStake))
+    );
+    assert_eq!(
+        t.client.try_stake(&t.user, &(MAX_STAKE_AMOUNT + 1)),
+        Err(Ok(PoolError::ExceedsMaxStake))
+    );
+    assert!(t.client.get_stake(&t.user).is_none());
+}
+
+#[test]
+fn test_stake_rejects_top_up_above_max_without_changing_stake() {
+    let t = setup(2, 1);
+    t.token_sac.mint(&t.user, &MAX_STAKE_AMOUNT);
+    t.client.stake(&t.user, &MAX_STAKE_AMOUNT);
+    let balance = t.token.balance(&t.user);
+    let start_ledger = t.client.get_stake(&t.user).unwrap().start_ledger;
+
+    assert_eq!(
+        t.client.try_stake(&t.user, &100i128),
+        Err(Ok(PoolError::ExceedsMaxStake))
+    );
+
+    let stake = t.client.get_stake(&t.user).unwrap();
+    assert_eq!(stake.amount, MAX_STAKE_AMOUNT);
+    assert_eq!(stake.start_ledger, start_ledger);
+    assert_eq!(t.token.balance(&t.user), balance);
+}
+
+#[test]
+fn test_stake_rejects_overflowing_stored_amount_without_trapping() {
+    let t = setup(2, 1);
+    t.env.as_contract(&t.contract_id, || {
+        t.env.storage().persistent().set(
+            &DataKey::UserStake(t.user.clone()),
+            &UserStake {
+                amount: i128::MAX,
+                start_ledger: t.env.ledger().sequence(),
+                credits_banked: 0,
+                credit_rate: 1,
+                multiplier: 1,
+            },
+        );
+    });
+
+    assert_eq!(
+        t.client.try_stake(&t.user, &100i128),
+        Err(Ok(PoolError::ExceedsMaxStake))
+    );
+    let stored_amount = t.env.as_contract(&t.contract_id, || {
+        t.env
+            .storage()
+            .persistent()
+            .get::<DataKey, UserStake>(&DataKey::UserStake(t.user.clone()))
+            .unwrap()
+            .amount
+    });
+    assert_eq!(stored_amount, i128::MAX);
+    assert_eq!(t.token.balance(&t.user), 1_000_000_000);
+}
+
+#[test]
 fn test_stake_emits_event() {
     let t = setup(2, 1);
     let amount = 1_000i128;
