@@ -186,6 +186,19 @@ fn test_stake_rejects_invalid_amounts() {
 }
 
 #[test]
+fn test_stake_rejects_when_caller_balance_is_insufficient() {
+    let t = setup(2, 1);
+    let balance = t.token.balance(&t.user);
+
+    assert_eq!(
+        t.client.try_stake(&t.user, &(balance + 1)),
+        Err(Ok(PoolError::InsufficientBalance))
+    );
+    assert!(t.client.get_stake(&t.user).is_none());
+    assert_eq!(t.token.balance(&t.user), balance);
+}
+
+#[test]
 fn test_stake_rejects_top_up_above_max_without_changing_stake() {
     let t = setup(2, 1);
     t.token_sac.mint(&t.user, &MAX_STAKE_AMOUNT);

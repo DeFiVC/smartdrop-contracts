@@ -1900,6 +1900,14 @@ impl FarmingPool {
         // Resolve the stake token before checkpointing or writing any state, so
         // a missing token config fails without touching the position. See #450, #451.
         let stake_token = get_stake_token(&env)?;
+        // Validate funding before mutating the position.  Token transfers trap
+        // when the caller is underfunded, but checking explicitly keeps the
+        // contract API deterministic and avoids relying on token-specific trap
+        // messages for a normal validation failure.
+        let caller_balance = token::TokenClient::new(&env, &stake_token).balance(&from);
+        if caller_balance < amount {
+            return Err(PoolError::InsufficientBalance);
+        }
 
         let mut existing_stake = env
             .storage()
