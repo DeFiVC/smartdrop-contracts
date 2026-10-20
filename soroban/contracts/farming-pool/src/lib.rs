@@ -1901,6 +1901,19 @@ impl FarmingPool {
         // a missing token config fails without touching the position. See #450, #451.
         let stake_token = get_stake_token(&env)?;
 
+        // Reject before any write if the pool-wide deposit total would overflow;
+        // `add_total_deposits` would otherwise trap via `expect`. See #452.
+        read_total_deposits(&env)
+            .checked_add(amount)
+            .ok_or(PoolError::ExceedsMaxStake)?;
+
+        // Check the caller can cover the transfer before writing any state, so an
+        // underfunded stake returns a typed error rather than trapping inside the
+        // token call. See #453.
+        if token::TokenClient::new(&env, &stake_token).balance(&from) < amount {
+            return Err(PoolError::InsufficientBalance);
+        }
+
         let mut existing_stake = env
             .storage()
             .persistent()

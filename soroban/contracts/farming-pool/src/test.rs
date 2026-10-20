@@ -261,6 +261,42 @@ fn test_stake_emits_event() {
 }
 
 #[test]
+fn test_stake_more_than_balance_returns_insufficient_balance_without_writing_state() {
+    let t = setup(1, 1);
+    let balance = t.token.balance(&t.user);
+
+    match t.client.try_stake(&t.user, &(balance + 1)) {
+        Err(Ok(PoolError::InsufficientBalance)) => {}
+        _ => panic!("expected PoolError::InsufficientBalance"),
+    }
+
+    assert!(t.client.get_stake(&t.user).is_none());
+    assert_eq!(t.client.total_staked(), 0);
+    assert_eq!(t.client.total_deposits(), 0);
+    assert_eq!(t.token.balance(&t.user), balance);
+}
+
+#[test]
+fn test_stake_overflowing_total_deposits_returns_typed_error_without_writing_state() {
+    let t = setup(1, 1);
+    t.env.as_contract(&t.contract_id, || {
+        t.env
+            .storage()
+            .instance()
+            .set(&DataKey::TotalDeposits, &(i128::MAX - 50));
+    });
+
+    match t.client.try_stake(&t.user, &100i128) {
+        Err(Ok(PoolError::ExceedsMaxStake)) => {}
+        _ => panic!("expected PoolError::ExceedsMaxStake"),
+    }
+
+    assert!(t.client.get_stake(&t.user).is_none());
+    assert_eq!(t.client.total_staked(), 0);
+    assert_eq!(t.client.total_deposits(), i128::MAX - 50);
+}
+
+#[test]
 fn test_unstake_emits_event() {
     let t = setup(2, 1);
     let amount = 1_000i128;
