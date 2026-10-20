@@ -1880,10 +1880,26 @@ impl FarmingPool {
         if whitelist_enabled(&env) && !is_user_whitelisted(&env, &from) {
             return Err(PoolError::NotWhitelisted);
         }
+
+        // Validate the resulting position, not just the delta, before any state
+        // is touched. Matches `lock_assets`: the minimum and cap apply to the
+        // caller's total stake, and overflow returns `ExceedsMaxStake` instead
+        // of trapping. See #448, #449.
+        let existing_amount = get_user_stake(&env, &from).map_or(0i128, |s| s.amount);
+        let total_amount = existing_amount
+            .checked_add(amount)
+            .ok_or(PoolError::ExceedsMaxStake)?;
         let min_stake = Self::get_min_stake_amount(env.clone())?;
-        if amount < min_stake {
+        if total_amount < min_stake {
             return Err(PoolError::BelowMinimumStake);
         }
+        if total_amount > MAX_STAKE_AMOUNT {
+            return Err(PoolError::ExceedsMaxStake);
+        }
+
+        // Resolve the stake token before checkpointing or writing any state, so
+        // a missing token config fails without touching the position. See #450, #451.
+        let stake_token = get_stake_token(&env)?;
 
         bump_instance(&env);
 
@@ -1892,10 +1908,7 @@ impl FarmingPool {
         let current = env.ledger().sequence();
         let mut new_stake = if let Some(mut existing) = get_user_stake(&env, &from) {
             checkpoint(&env, &from, &mut existing);
-            existing.amount = existing.amount.checked_add(amount).expect("stake amount overflow");
-            if existing.amount > MAX_STAKE_AMOUNT {
-                return Err(PoolError::ExceedsMaxStake);
-            }
+            existing.amount = total_amount;
             existing
         } else {
             UserStake {
@@ -1922,7 +1935,6 @@ impl FarmingPool {
         add_total_deposits(&env, amount);
 
         // Pull tokens from caller into the contract.
-        let stake_token = get_stake_token(&env)?;
         token::TokenClient::new(&env, &stake_token).transfer(
             &from,
             env.current_contract_address(),
