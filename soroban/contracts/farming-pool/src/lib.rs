@@ -3516,6 +3516,44 @@ impl FarmingPool {
             .get(&DataKey::PeakTotalStaked)
             .unwrap_or(0))
     }
+
+    // ── Feature improvements: #570, #571, #572, #573 ───────────────────────
+
+    /// Return the sum of all users' boost allocations, in percent points (Issue #570).
+    pub fn get_total_boost_allocation(env: Env) -> Result<u64, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        Ok(read_total_boost_allocations(&env))
+    }
+
+    /// Return the number of users with a non-zero boost allocation (Issue #571).
+    pub fn get_boost_user_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        Ok(read_boost_user_count(&env))
+    }
+
+    /// Return the mean boost allocation per boosted user, rounded down (Issue #572).
+    pub fn get_average_boost_allocation(env: Env) -> Result<u64, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        let boost_users = read_boost_user_count(&env);
+        if boost_users == 0 {
+            return Ok(0);
+        }
+        Ok(read_total_boost_allocations(&env) / boost_users as u64)
+    }
+
+    /// Return the ledger of the last `set_global_multiplier` call, or 0 if unset (Issue #573).
+    pub fn get_multiplier_change_ledger(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        Ok(read_global_multiplier_change_ledger(&env))
+    }
 }
 
 mod test;
