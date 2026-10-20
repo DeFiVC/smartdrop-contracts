@@ -16,7 +16,7 @@ use types::{
     BoostHistoryPage, CreditRateEvent, CreditRateHistoryPage, DataKey, GlobalMultiplierEvent,
     GlobalMultiplierHistoryPage, ListWhitelistedResponse, Position, StakeEvent,
     StakeHistoryPage,
-    UserStake, WhitelistEvent, WhitelistHistoryPage,
+    UserStake, WhitelistEvent, WhitelistHistoryPage, UserActivity, TierInfo, DistributionEvent, PoolAnalytics,
 };
 
 // Expose compiled WASM bytes so sibling crates (e.g. `factory`) can upload the
@@ -228,12 +228,16 @@ fn get_user_stake(env: &Env, user: &Address) -> Option<UserStake> {
 
 fn set_user_stake(env: &Env, user: &Address, stake: &UserStake) {
     let key = DataKey::UserStake(user.clone());
+    let is_new = !env.storage().persistent().has(&key);
     env.storage().persistent().set(&key, stake);
     bump_user(env, &key);
     let mut users = get_staked_users_list(env);
     if !users.contains(user) {
         users.push_back(user.clone());
         set_staked_users_list(env, &users);
+        if is_new {
+            increment_unique_user_count(env);
+        }
     }
 }
 
@@ -264,10 +268,9 @@ fn add_total_staked(env: &Env, amount: i128) {
         .instance()
         .get::<DataKey, i128>(&DataKey::TotalStaked)
         .unwrap_or(0);
-    env.storage().instance().set(
-        &DataKey::TotalStaked,
-        &total.checked_add(amount).expect("total stake overflow"),
-    );
+    let new_total = total.checked_add(amount).expect("total stake overflow");
+    env.storage().instance().set(&DataKey::TotalStaked, &new_total);
+    update_peak_total_staked(env, new_total);
 }
 
 fn subtract_total_staked(env: &Env, amount: i128) {
@@ -380,6 +383,163 @@ fn read_active_stake_count(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::ActiveStakeCount)
+        .unwrap_or(0)
+}
+
+// ── Feature 1: User Activity Tracking ────────────────────────────────────────
+
+fn record_user_activity(env: &Env, user: &Address) {
+    let key = DataKey::UserLastActivity(user.clone());
+    let current_ledger = env.ledger().sequence();
+    env.storage().persistent().set(&key, &current_ledger);
+    bump_user(env, &key);
+}
+
+fn get_user_last_activity(env: &Env, user: &Address) -> Option<u32> {
+    let key = DataKey::UserLastActivity(user.clone());
+    let value: Option<u32> = env.storage().persistent().get(&key);
+    if value.is_some() {
+        bump_user(env, &key);
+    }
+    value
+}
+
+fn increment_user_activity_count(env: &Env, user: &Address) {
+    let key = DataKey::UserActivityCount(user.clone());
+    let count: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    env.storage().persistent().set(&key, &(count + 1));
+    bump_user(env, &key);
+}
+
+fn read_user_activity_count(env: &Env, user: &Address) -> u32 {
+    let key = DataKey::UserActivityCount(user.clone());
+    let count: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    if count > 0 {
+        bump_user(env, &key);
+    }
+    count
+}
+
+// ── Feature 2: Performance Tier System ───────────────────────────────────────
+
+fn get_user_tier(env: &Env, user: &Address) -> u32 {
+    let key = DataKey::UserTier(user.clone());
+    let tier: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+    if tier > 0 {
+        bump_user(env, &key);
+    }
+    tier
+}
+
+fn set_user_tier(env: &Env, user: &Address, tier: u32) {
+    let key = DataKey::UserTier(user.clone());
+    env.storage().persistent().set(&key, &tier);
+    bump_user(env, &key);
+}
+
+fn get_user_tier_points(env: &Env, user: &Address) -> i128 {
+    let key = DataKey::UserTierPoints(user.clone());
+    let points: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+    if points > 0 {
+        bump_user(env, &key);
+    }
+    points
+}
+
+fn add_user_tier_points(env: &Env, user: &Address, points: i128) {
+    let key = DataKey::UserTierPoints(user.clone());
+    let current = env.storage().persistent().get::<DataKey, i128>(&key).unwrap_or(0);
+    env.storage().persistent().set(&key, &(current + points));
+    bump_user(env, &key);
+}
+
+// Calculate tier based on points and lock duration
+fn calculate_user_tier(points: i128, lock_ledgers: u32) -> u32 {
+    match (points, lock_ledgers) {
+        (p, l) if p >= 10000 && l >= 2000000 => 3, // platinum: 10k+ points, 2M+ ledgers
+        (p, l) if p >= 5000 && l >= 1000000 => 2,  // gold: 5k+ points, 1M+ ledgers
+        (p, l) if p >= 1000 && l >= 500000 => 1,   // silver: 1k+ points, 500k+ ledgers
+        _ => 0,                                      // bronze: default
+    }
+}
+
+// ── Feature 3: Bulk Reward Distribution ──────────────────────────────────────
+
+fn record_distribution_event(env: &Env, user_count: u32, total_amount: i128, admin: &Address) {
+    let count: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::DistributionEventCount)
+        .unwrap_or(0);
+    let event = DistributionEvent {
+        user_count,
+        total_amount,
+        admin: admin.clone(),
+        ledger: env.ledger().sequence(),
+    };
+    env.storage()
+        .persistent()
+        .set(&DataKey::DistributionHistory(count), &event);
+    env.storage()
+        .instance()
+        .set(&DataKey::DistributionEventCount, &(count + 1));
+}
+
+fn add_total_distributed_rewards(env: &Env, amount: i128) {
+    let total: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TotalDistributedRewards)
+        .unwrap_or(0);
+    env.storage().instance().set(
+        &DataKey::TotalDistributedRewards,
+        &total.checked_add(amount).expect("reward distribution overflow"),
+    );
+}
+
+// ── Feature 4: Extended Analytics ────────────────────────────────────────────
+
+fn update_peak_total_staked(env: &Env, current_total: i128) {
+    let peak: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::PeakTotalStaked)
+        .unwrap_or(0);
+    if current_total > peak {
+        env.storage()
+            .instance()
+            .set(&DataKey::PeakTotalStaked, &current_total);
+    }
+}
+
+fn increment_unique_user_count(env: &Env) {
+    let count: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::UniqueUserCount)
+        .unwrap_or(0);
+    env.storage()
+        .instance()
+        .set(&DataKey::UniqueUserCount, &(count + 1));
+}
+
+fn decrement_unique_user_count(env: &Env) {
+    let count: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::UniqueUserCount)
+        .unwrap_or(0);
+    if count > 0 {
+        env.storage()
+            .instance()
+            .set(&DataKey::UniqueUserCount, &(count - 1));
+    }
+}
+
+fn read_unique_user_count(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::UniqueUserCount)
         .unwrap_or(0)
 }
 
@@ -601,12 +761,16 @@ fn get_position(env: &Env, user: &Address) -> Option<Position> {
 
 fn set_position(env: &Env, user: &Address, position: &Position) {
     let key = DataKey::UserPosition(user.clone());
+    let is_new = !env.storage().persistent().has(&key);
     env.storage().persistent().set(&key, position);
     bump_user(env, &key);
     let mut users = get_locked_users_list(env);
     if !users.contains(user) {
         users.push_back(user.clone());
         set_locked_users_list(env, &users);
+        if is_new {
+            increment_unique_user_count(env);
+        }
     }
 }
 
@@ -1344,6 +1508,9 @@ impl FarmingPool {
         );
 
         record_stake_event(&env, &user, symbol_short!("lock"), amount);
+        record_user_activity(&env, &user);
+        increment_user_activity_count(&env, &user);
+        add_user_tier_points(&env, &user, (amount / 1000000) + (read_min_lock_period(&env) as i128 / 100000));
 
         Ok(())
     }
@@ -1412,6 +1579,8 @@ impl FarmingPool {
         );
 
         record_stake_event(&env, &user, symbol_short!("unlock"), amount);
+        record_user_activity(&env, &user);
+        increment_user_activity_count(&env, &user);
 
         Ok(())
     }
@@ -2037,6 +2206,9 @@ impl FarmingPool {
         );
 
         record_stake_event(&env, &from, symbol_short!("stake"), amount);
+        record_user_activity(&env, &from);
+        increment_user_activity_count(&env, &from);
+        add_user_tier_points(&env, &from, amount / 1000000); // Award tier points based on staked amount
 
         Ok(())
     }
@@ -2102,6 +2274,8 @@ impl FarmingPool {
         );
 
         record_stake_event(&env, &from, symbol_short!("unstake"), amount);
+        record_user_activity(&env, &from);
+        increment_user_activity_count(&env, &from);
 
         Ok(total_credits)
     }
@@ -3065,79 +3239,209 @@ impl FarmingPool {
         Ok(GlobalMultiplierHistoryPage { events, total })
     }
 
-    /// Return the count of users with active locked positions (#562).
+    // ── Feature 1: User Activity Tracking (Issue #554) ──────────────────────
+
+    /// Get the activity summary for a user including last interaction and activity count.
     ///
-    /// This is a lightweight query that returns the number of users who currently
-    /// have funds in the time-locked `Position` system via `lock_assets`.
-    pub fn get_locked_user_count(env: Env) -> Result<u32, PoolError> {
+    /// Returns a `UserActivity` struct with the last ledger the user interacted with
+    /// the pool, total activity count, and the ledger range of their involvement.
+    pub fn get_user_activity(env: Env, user: Address) -> Result<Option<UserActivity>, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
-        let locked_users = get_locked_users_list(&env);
-        Ok(locked_users.len() as u32)
+
+        if let Some(last_activity) = get_user_last_activity(&env, &user) {
+            let activity_count = read_user_activity_count(&env, &user);
+            let current_ledger = env.ledger().sequence();
+            let activity_span = current_ledger.saturating_sub(last_activity);
+
+            Ok(Some(UserActivity {
+                last_activity_ledger: last_activity,
+                activity_count,
+                activity_span,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
-    /// Return a paginated list of all active flexible stakes with details (#563).
+    // ── Feature 2: Performance Tier System (Issue #555) ────────────────────
+
+    /// Get the user's current performance tier and tier points.
     ///
-    /// Similar to `get_all_positions` but for the flexible staking system.
-    /// Returns `(Address, UserStake)` tuples paginated by `start` and `limit`.
-    ///
-    /// `start`: zero-based index of the first stake to return.
-    /// `limit`: maximum number of stakes to return per call.
-    ///
-    /// Returns a vector of `(Address, UserStake)` tuples. Call repeatedly with
-    /// increasing `start` until the returned vector is empty or has fewer than
-    /// `limit` elements to retrieve all stakes.
-    ///
-    /// This is useful for TVL calculations, analytics, and protocol health
-    /// monitoring where off-chain systems need to iterate all stakers.
-    pub fn get_all_stakes(
-        env: Env,
-        start: u32,
-        limit: u32,
-    ) -> Result<Vec<(Address, UserStake)>, PoolError> {
+    /// Returns a `TierInfo` struct containing the user's tier level (0-3),
+    /// accumulated tier points, and the reward multiplier for that tier.
+    /// Tier levels: 0=bronze, 1=silver, 2=gold, 3=platinum.
+    pub fn get_user_tier_info(env: Env, user: Address) -> Result<TierInfo, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
 
-        let staked_users = get_staked_users_list(&env);
-        let total = staked_users.len();
-        let mut stakes: Vec<(Address, UserStake)> = Vec::new(&env);
-        let mut i = start;
-        let mut count = 0u32;
-        while i < total && count < limit {
-            let user = staked_users.get(i).unwrap();
-            if let Some(stake) = get_user_stake(&env, &user) {
-                stakes.push_back((user, stake));
-            }
-            i += 1;
-            count += 1;
+        let tier_points = get_user_tier_points(&env, &user);
+        let position_ledgers = get_position(&env, &user)
+            .map(|p| env.ledger().sequence().saturating_sub(p.lock_ledger))
+            .unwrap_or(0);
+
+        let tier_level = calculate_user_tier(tier_points, position_ledgers);
+        let reward_multiplier = match tier_level {
+            3 => 2000,  // platinum: 2.0x
+            2 => 1500,  // gold: 1.5x
+            1 => 1250,  // silver: 1.25x
+            _ => 1000,  // bronze: 1.0x
+        };
+
+        Ok(TierInfo {
+            tier_level,
+            tier_points,
+            reward_multiplier,
+        })
+    }
+
+    /// Award tier points to a user (admin-only).
+    ///
+    /// Admin can award tier points to users for special achievements or milestones.
+    /// Points accumulate and determine the user's performance tier level.
+    pub fn award_tier_points(env: Env, user: Address, points: i128) -> Result<(), PoolError> {
+        require_initialized(&env)?;
+        let admin = get_admin(&env)?;
+        admin.require_auth();
+        bump_instance(&env);
+
+        if points <= 0 {
+            return Err(PoolError::InvalidAmount);
         }
 
-        Ok(stakes)
+        add_user_tier_points(&env, &user, points);
+
+        let total_points = get_user_tier_points(&env, &user);
+        let position_ledgers = get_position(&env, &user)
+            .map(|p| env.ledger().sequence().saturating_sub(p.lock_ledger))
+            .unwrap_or(0);
+        let new_tier = calculate_user_tier(total_points, position_ledgers);
+        set_user_tier(&env, &user, new_tier);
+
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("tier_pts")),
+            (user, points, new_tier),
+        );
+
+        Ok(())
     }
 
-    /// Return the count of users with active boost allocations (#564).
+    // ── Feature 3: Bulk Reward Distribution (Issue #556) ───────────────────
+
+    /// Distribute rewards to multiple users at once (admin-only).
     ///
-    /// This is a lightweight query that returns the number of users who currently
-    /// have a non-zero boost allocation percentage set via `set_boost`.
-    pub fn get_boost_user_count(env: Env) -> Result<u32, PoolError> {
+    /// Allows admin to reward multiple users in a single call (up to 50 users per call).
+    /// Each user receives the specified amount of credits. Capped at 50 users per call
+    /// for gas efficiency.
+    pub fn distribute_bulk_rewards(
+        env: Env,
+        users: Vec<Address>,
+        reward_per_user: i128,
+    ) -> Result<(), PoolError> {
         require_initialized(&env)?;
+        let admin = get_admin(&env)?;
+        admin.require_auth();
+
+        if users.len() > 50 {
+            return Err(PoolError::BatchTooLarge);
+        }
+        if reward_per_user <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+
         bump_instance(&env);
-        Ok(read_boost_user_count(&env))
+
+        let total_distributed = reward_per_user
+            .checked_mul(users.len() as i128)
+            .ok_or(PoolError::ExceedsMaxStake)?;
+
+        for user in users.iter() {
+            add_total_credits(&env, reward_per_user);
+            add_total_banked_credits(&env, reward_per_user);
+            let key = DataKey::BankedCredits(user.clone());
+            let mut totals: BankedCreditTotals = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(BankedCreditTotals {
+                    position_credits: 0,
+                    stake_credits: 0,
+                });
+            totals.stake_credits += reward_per_user;
+            set_banked_credits(&env, &user, totals);
+        }
+
+        add_total_distributed_rewards(&env, total_distributed);
+        record_distribution_event(&env, users.len() as u32, total_distributed, &admin);
+
+        #[allow(deprecated)]
+        env.events().publish(
+            (symbol_short!("pool"), symbol_short!("bulk_rwd")),
+            (users.len() as u32, total_distributed),
+        );
+
+        Ok(())
     }
 
-    /// Return the total boost allocation percentage across all users (#565).
-    ///
-    /// Returns the sum of all active boost `allocation_pct` values currently set
-    /// by users via `set_boost`. This is tracked incrementally as `set_boost` calls
-    /// modify each user's allocation.
-    ///
-    /// The total allocation is used internally to track how much of the total
-    /// staking pool is currently boosted. A value of 0 means no users have active
-    /// boost allocations; higher values indicate more stakers are using boost.
-    pub fn get_total_boost_allocation(env: Env) -> Result<u64, PoolError> {
+    /// Get the total rewards distributed through bulk operations.
+    pub fn get_total_distributed_rewards(env: Env) -> Result<i128, PoolError> {
         require_initialized(&env)?;
         bump_instance(&env);
-        Ok(read_total_boost_allocations(&env))
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalDistributedRewards)
+            .unwrap_or(0))
+    }
+
+    // ── Feature 4: Extended Pool Analytics (Issue #557) ────────────────────
+
+    /// Get extended pool analytics including average lock duration and peak TVL.
+    ///
+    /// Returns a `PoolAnalytics` struct with metrics useful for protocol health monitoring:
+    /// average lock duration, peak total staked, unique user count, and TVL ratio.
+    pub fn get_pool_analytics(env: Env) -> Result<PoolAnalytics, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        let locked_users = get_locked_users_list(&env);
+        let total_lock_duration: u32 = locked_users
+            .iter()
+            .filter_map(|user| {
+                get_position(&env, &user)
+                    .map(|p| env.ledger().sequence().saturating_sub(p.lock_ledger))
+            })
+            .fold(0u32, |acc, duration| acc.saturating_add(duration));
+
+        let average_lock_duration = if !locked_users.is_empty() {
+            total_lock_duration / locked_users.len()
+        } else {
+            0
+        };
+
+        let peak_total_staked: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PeakTotalStaked)
+            .unwrap_or(0);
+
+        let unique_users = read_unique_user_count(&env);
+        let total_deposits = read_total_deposits(&env);
+        let total_staked = read_total_staked(&env);
+
+        let tvl_ratio = if total_staked > 0 {
+            ((total_deposits as u64) * 1000) / (total_staked as u64)
+        } else {
+            0
+        };
+
+        Ok(PoolAnalytics {
+            average_lock_duration,
+            peak_total_staked,
+            unique_user_count: unique_users,
+            tvl_ratio,
+        })
     }
 
 }
