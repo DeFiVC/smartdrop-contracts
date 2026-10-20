@@ -14,6 +14,8 @@ pub enum VestingError {
     /// A supplied address is unusable (e.g. the zero address as beneficiary),
     /// which would strand released funds permanently (#405).
     InvalidInput = 8,
+    /// The wallet does not hold enough tokens to satisfy a release.
+    InsufficientBalance = 9,
 }
 
 /// Storage keys for all instance data in the vesting wallet.

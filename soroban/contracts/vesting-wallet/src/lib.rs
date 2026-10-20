@@ -265,13 +265,19 @@ impl VestingWallet {
             return Ok(0);
         }
 
+        let token_address = get_token(&env);
+        let token_client = token::TokenClient::new(&env, &token_address);
+        if token_client.balance(&env.current_contract_address()) < releasable {
+            return Err(VestingError::InsufficientBalance);
+        }
+
         increment_release_count(&env);
 
         env.storage()
             .instance()
             .set(&DataKey::ReleasedAmount, &(released + releasable));
 
-        token::TokenClient::new(&env, &get_token(&env)).transfer(
+        token_client.transfer(
             &env.current_contract_address(),
             &beneficiary,
             &releasable,

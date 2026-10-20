@@ -93,6 +93,23 @@ fn setup_revocable(cliff_offset: u32, period: u32, total: i128) -> TestEnv {
     setup_schedule(cliff_offset, period, total, true)
 }
 
+#[test]
+fn test_release_rejects_when_wallet_balance_is_insufficient() {
+    let t = setup(0, 10, 1_000);
+    advance_ledgers(&t.env, 5);
+
+    // Simulate an underfunded wallet (for example, tokens recovered by an
+    // administrator). The release must fail before updating ReleasedAmount.
+    t.token
+        .transfer(&t.contract_id, &t.admin, &600i128);
+
+    assert_eq!(
+        t.client.try_release(),
+        Err(Ok(VestingError::InsufficientBalance))
+    );
+    assert_eq!(t.client.released_amount().unwrap(), 0);
+}
+
 // ── Initialisation tests ──────────────────────────────────────────────────────
 
 #[test]
