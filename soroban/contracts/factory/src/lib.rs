@@ -331,6 +331,13 @@ fn create_pool_inner(
         return Err(FactoryError::InvalidAsset);
     }
 
+    // Validation 46: Ensure the staking asset is not the factory contract
+    // itself. A self-referential asset would make the pool's staking token
+    // the factory, which is never a valid SEP-41 stake asset (#536-#539).
+    if asset == env.current_contract_address() {
+        return Err(FactoryError::InvalidAsset);
+    }
+
     // Validation 24: Ensure global_multiplier is strictly within bounds
     // Must be at least 1 and at most MAX_GLOBAL_MULTIPLIER (1000)
     if global_multiplier < 1 {
@@ -338,6 +345,13 @@ fn create_pool_inner(
     }
     if global_multiplier > MAX_GLOBAL_MULTIPLIER {
         return Err(FactoryError::InvalidGlobalMultiplier);
+    }
+
+    // Validation 43: Reject a zero daily_rate at the API boundary before any
+    // conversion work, so callers get a typed error immediately rather than
+    // after helper arithmetic (#536-#539).
+    if daily_rate == 0 {
+        return Err(FactoryError::InvalidCreditRate);
     }
 
     // Validation 25: Convert and validate daily_rate with strict bounds checking
@@ -349,6 +363,11 @@ fn create_pool_inner(
         return Err(FactoryError::InvalidCreditRate);
     }
 
+    // Validation 45: Reject a zero min_lock_period before the u32 conversion
+    // so a lockless pool is refused at the boundary with a typed error (#536-#539).
+    if min_lock_period == 0 {
+        return Err(FactoryError::MinLockPeriodTooShort);
+    }
     let min_lock_period: u32 = min_lock_period
         .try_into()
         .map_err(|_| FactoryError::MinLockPeriodOutOfRange)?;
@@ -357,6 +376,12 @@ fn create_pool_inner(
     }
     if min_lock_period > MAX_MIN_LOCK_PERIOD {
         return Err(FactoryError::MinLockPeriodAboveCeiling);
+    }
+    // Validation 44: Reject an oversized raw min_stake_amount before the
+    // non-positive defaulting logic, so a clearly out-of-range request is
+    // refused at the boundary (#536-#539).
+    if min_stake_amount > MAX_STAKE_AMOUNT {
+        return Err(FactoryError::InvalidMinStakeAmount);
     }
     let effective_min_stake = if min_stake_amount <= 0 {
         MIN_STAKE_AMOUNT
