@@ -190,6 +190,32 @@ pub enum DataKey {
     GlobalMultiplierEventCount,
     /// Global multiplier change event by index (#311).
     GlobalMultiplierHistory(u32),
+    // ── Feature 1: User Activity Tracking ────────────────────────────────────
+    /// Ledger sequence of user's last interaction with the pool.
+    UserLastActivity(Address),
+    /// Total activity count per user (stake, unstake, lock, unlock operations).
+    UserActivityCount(Address),
+    // ── Feature 2: Performance Tiers ─────────────────────────────────────────
+    /// User's current tier level (0=bronze, 1=silver, 2=gold, 3=platinum).
+    UserTier(Address),
+    /// Total earned tier points for the user.
+    UserTierPoints(Address),
+    /// Counter for users currently at each tier level.
+    TierUserCount(u32),
+    // ── Feature 3: Bulk Reward Distribution ──────────────────────────────────
+    /// Distribution event ID counter.
+    DistributionEventCount,
+    /// Store distribution event by index.
+    DistributionHistory(u32),
+    /// Total rewards distributed through bulk operations.
+    TotalDistributedRewards,
+    // ── Feature 4: Extended Pool Analytics ───────────────────────────────────
+    /// Average lock duration across all users (cached, updated on checkpoints).
+    AverageLockDuration,
+    /// Peak total staked amount recorded.
+    PeakTotalStaked,
+    /// Current number of unique users with any stake or position.
+    UniqueUserCount,
 }
 
 /// Paginated response for `get_whitelisted_users`.
@@ -366,4 +392,64 @@ pub struct GlobalMultiplierEvent {
 pub struct GlobalMultiplierHistoryPage {
     pub events: Vec<GlobalMultiplierEvent>,
     pub total: u32,
+}
+
+// ── Feature 1: User Activity Tracking (Issue #554) ─────────────────────────
+
+/// User activity summary returned by `get_user_activity`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserActivity {
+    /// Ledger sequence of user's last interaction.
+    pub last_activity_ledger: u32,
+    /// Total number of staking/locking operations by user.
+    pub activity_count: u32,
+    /// Ledger range since first activity.
+    pub activity_span: u32,
+}
+
+// ── Feature 2: Performance Tiers (Issue #555) ────────────────────────────────
+
+/// Performance tier level and rewards configuration.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TierInfo {
+    /// Tier level: 0=bronze, 1=silver, 2=gold, 3=platinum.
+    pub tier_level: u32,
+    /// Total points earned by user toward current tier.
+    pub tier_points: i128,
+    /// Reward multiplier for this tier (e.g., 1000 = 1.0x, 1500 = 1.5x).
+    pub reward_multiplier: u32,
+}
+
+// ── Feature 3: Bulk Reward Distribution (Issue #556) ───────────────────────
+
+/// Distribution event recorded for bulk operations.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DistributionEvent {
+    /// Number of users included in distribution.
+    pub user_count: u32,
+    /// Total amount distributed.
+    pub total_amount: i128,
+    /// Admin who initiated the distribution.
+    pub admin: Address,
+    /// Ledger at which distribution occurred.
+    pub ledger: u32,
+}
+
+// ── Feature 4: Extended Pool Analytics (Issue #557) ──────────────────────────
+
+/// Extended analytics snapshot for pool health monitoring.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PoolAnalytics {
+    /// Average lock duration in ledgers across all locked positions.
+    pub average_lock_duration: u32,
+    /// Peak total staked amount ever recorded.
+    pub peak_total_staked: i128,
+    /// Current total unique users (with stake or position).
+    pub unique_user_count: u32,
+    /// Pool TVL turnover ratio (total_deposits / total_staked).
+    pub tvl_ratio: u64,
 }

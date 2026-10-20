@@ -1310,6 +1310,32 @@ fn test_create_pool_rejects_daily_rate_exceeding_max_credit_rate() {
 }
 
 #[test]
+fn test_create_pool_rejects_daily_rate_above_max_daily_rate() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    // MAX_DAILY_RATE = MAX_CREDIT_RATE * LEDGERS_PER_DAY = 1_728_000_000_000.
+    let above_max = 1_728_000_000_001u128;
+    let result = t
+        .client
+        .try_create_pool(&asset, &above_max, &2u32, &25u64, &0i128);
+    assert_eq!(result, Err(Ok(FactoryError::InvalidCreditRate)));
+    assert_eq!(t.client.pool_count(), 0);
+}
+
+#[test]
+fn test_create_pool_accepts_daily_rate_exactly_at_max_daily_rate() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    let at_max = 1_728_000_000_000u128;
+    let pool_id = t.client.create_pool(&asset, &at_max, &2u32, &25u64, &0i128);
+    let record = t.client.get_pool(&pool_id);
+    assert_eq!(record.daily_rate, at_max);
+    assert_eq!(record.credit_rate, 100_000_000);
+}
+
+#[test]
 fn test_create_pool_rejects_min_lock_period_out_of_u32_range() {
     let t = setup();
     let asset = test_asset(&t.env);

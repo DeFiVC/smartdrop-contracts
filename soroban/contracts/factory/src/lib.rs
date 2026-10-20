@@ -40,6 +40,10 @@ const MAX_GLOBAL_MULTIPLIER: u32 = 1_000;
 // Maximum credit rate per ledger, mirroring the farming pool's own limit so an
 // excessive daily rate is caught before pool deployment (#495).
 const MAX_CREDIT_RATE: i128 = 100_000_000;
+// Maximum caller-facing daily rate, derived from the credit-rate ceiling so
+// `create_pool`'s public unit is bounded directly rather than only after
+// ledger conversion (#524-#527).
+const MAX_DAILY_RATE: u128 = MAX_CREDIT_RATE as u128 * LEDGERS_PER_DAY;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -347,10 +351,9 @@ fn create_pool_inner(
         return Err(FactoryError::InvalidGlobalMultiplier);
     }
 
-    // Validation 43: Reject a zero daily_rate at the API boundary before any
-    // conversion work, so callers get a typed error immediately rather than
-    // after helper arithmetic (#536-#539).
-    if daily_rate == 0 {
+    // Validation 31: Bound the caller-facing daily_rate directly so an
+    // oversized rate is rejected at the API boundary before ledger conversion.
+    if daily_rate > MAX_DAILY_RATE {
         return Err(FactoryError::InvalidCreditRate);
     }
 
