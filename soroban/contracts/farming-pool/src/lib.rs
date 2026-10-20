@@ -3065,6 +3065,81 @@ impl FarmingPool {
         Ok(GlobalMultiplierHistoryPage { events, total })
     }
 
+    /// Return the count of users with active locked positions (#562).
+    ///
+    /// This is a lightweight query that returns the number of users who currently
+    /// have funds in the time-locked `Position` system via `lock_assets`.
+    pub fn get_locked_user_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        let locked_users = get_locked_users_list(&env);
+        Ok(locked_users.len() as u32)
+    }
+
+    /// Return a paginated list of all active flexible stakes with details (#563).
+    ///
+    /// Similar to `get_all_positions` but for the flexible staking system.
+    /// Returns `(Address, UserStake)` tuples paginated by `start` and `limit`.
+    ///
+    /// `start`: zero-based index of the first stake to return.
+    /// `limit`: maximum number of stakes to return per call.
+    ///
+    /// Returns a vector of `(Address, UserStake)` tuples. Call repeatedly with
+    /// increasing `start` until the returned vector is empty or has fewer than
+    /// `limit` elements to retrieve all stakes.
+    ///
+    /// This is useful for TVL calculations, analytics, and protocol health
+    /// monitoring where off-chain systems need to iterate all stakers.
+    pub fn get_all_stakes(
+        env: Env,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<(Address, UserStake)>, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+
+        let staked_users = get_staked_users_list(&env);
+        let total = staked_users.len();
+        let mut stakes: Vec<(Address, UserStake)> = Vec::new(&env);
+        let mut i = start;
+        let mut count = 0u32;
+        while i < total && count < limit {
+            let user = staked_users.get(i).unwrap();
+            if let Some(stake) = get_user_stake(&env, &user) {
+                stakes.push_back((user, stake));
+            }
+            i += 1;
+            count += 1;
+        }
+
+        Ok(stakes)
+    }
+
+    /// Return the count of users with active boost allocations (#564).
+    ///
+    /// This is a lightweight query that returns the number of users who currently
+    /// have a non-zero boost allocation percentage set via `set_boost`.
+    pub fn get_boost_user_count(env: Env) -> Result<u32, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_boost_user_count(&env))
+    }
+
+    /// Return the total boost allocation percentage across all users (#565).
+    ///
+    /// Returns the sum of all active boost `allocation_pct` values currently set
+    /// by users via `set_boost`. This is tracked incrementally as `set_boost` calls
+    /// modify each user's allocation.
+    ///
+    /// The total allocation is used internally to track how much of the total
+    /// staking pool is currently boosted. A value of 0 means no users have active
+    /// boost allocations; higher values indicate more stakers are using boost.
+    pub fn get_total_boost_allocation(env: Env) -> Result<u64, PoolError> {
+        require_initialized(&env)?;
+        bump_instance(&env);
+        Ok(read_total_boost_allocations(&env))
+    }
+
 }
 
 mod test;
