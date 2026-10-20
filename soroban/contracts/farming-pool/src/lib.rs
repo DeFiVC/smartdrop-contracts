@@ -1903,7 +1903,7 @@ impl FarmingPool {
         // Validate funding before mutating the position.  Token transfers trap
         // when the caller is underfunded, but checking explicitly keeps the
         // contract API deterministic and avoids relying on token-specific trap
-        // messages for a normal validation failure.
+        // messages for a normal validation failure. See #460.
         let caller_balance = token::TokenClient::new(&env, &stake_token).balance(&from);
         if caller_balance < amount {
             return Err(PoolError::InsufficientBalance);
@@ -1915,22 +1915,10 @@ impl FarmingPool {
             .checked_add(amount)
             .ok_or(PoolError::ExceedsMaxStake)?;
 
-        // Check the caller can cover the transfer before writing any state, so an
-        // underfunded stake returns a typed error rather than trapping inside the
-        // token call. See #453.
-        if token::TokenClient::new(&env, &stake_token).balance(&from) < amount {
-            return Err(PoolError::InsufficientBalance);
-        }
-
-        let mut existing_stake = env
-            .storage()
-            .persistent()
-            .get::<DataKey, UserStake>(&DataKey::UserStake(from.clone()));
-        let new_amount = existing_stake
-            .as_ref()
-            .map_or(Some(amount), |stake| stake.amount.checked_add(amount))
-            .filter(|total| *total <= MAX_STAKE_AMOUNT)
-            .ok_or(PoolError::ExceedsMaxStake)?;
+        // Re-use the already-fetched stake record rather than hitting storage a
+        // second time. `total_amount` was validated above via `checked_add`;
+        // re-deriving it here would be redundant and could diverge. See #461.
+        let mut existing_stake = get_user_stake(&env, &from);
 
         bump_instance(&env);
 
