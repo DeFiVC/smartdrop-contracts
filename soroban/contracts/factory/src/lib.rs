@@ -390,7 +390,7 @@ fn create_pool_inner(
     };
     // The requested amount must lie within [MIN_STAKE_AMOUNT,
     // MAX_STAKE_AMOUNT] so the pool is usable.
-    if effective_min_stake < MIN_STAKE_AMOUNT || effective_min_stake > MAX_STAKE_AMOUNT {
+    if !(MIN_STAKE_AMOUNT..=MAX_STAKE_AMOUNT).contains(&effective_min_stake) {
         return Err(FactoryError::InvalidMinStakeAmount);
     }
 
