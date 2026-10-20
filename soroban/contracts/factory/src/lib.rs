@@ -30,10 +30,10 @@ const MAX_STAKE_AMOUNT: i128 = 10i128.pow(18);
 // Minimum lock period in ledgers required to prevent flash-loan-style attacks.
 const MIN_LOCK_PERIOD: u32 = 1;
 // Maximum global multiplier, mirroring the farming pool's own limit so an
-// invalid multiplier is caught before pool deployment (#496-#499).
+// invalid multiplier is caught before pool deployment (#494).
 const MAX_GLOBAL_MULTIPLIER: u32 = 1_000;
 // Maximum credit rate per ledger, mirroring the farming pool's own limit so an
-// excessive daily rate is caught before pool deployment (#496-#499).
+// excessive daily rate is caught before pool deployment (#495).
 const MAX_CREDIT_RATE: i128 = 100_000_000;
 
 /// Convert a "credits per day" figure into the deployed pool's native
