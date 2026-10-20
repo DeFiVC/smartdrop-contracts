@@ -1377,6 +1377,61 @@ fn test_create_pool_accepts_min_lock_period_exactly_at_ceiling() {
 }
 
 #[test]
+fn test_create_pool_rejects_zero_daily_rate_at_api_boundary() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    let result = t
+        .client
+        .try_create_pool(&asset, &0u128, &2u32, &25u64, &0i128);
+    assert_eq!(result, Err(Ok(FactoryError::InvalidCreditRate)));
+    assert_eq!(t.client.pool_count(), 0);
+}
+
+#[test]
+fn test_create_pool_rejects_min_stake_amount_above_max_before_defaulting() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    let result = t.client.try_create_pool(
+        &asset,
+        &1_728_000u128,
+        &2u32,
+        &25u64,
+        &(MAX_STAKE_AMOUNT + 1),
+    );
+    assert_eq!(result, Err(Ok(FactoryError::InvalidMinStakeAmount)));
+    assert_eq!(t.client.pool_count(), 0);
+}
+
+#[test]
+fn test_create_pool_rejects_zero_min_lock_period() {
+    let t = setup();
+    let asset = test_asset(&t.env);
+
+    let result = t
+        .client
+        .try_create_pool(&asset, &1_728_000u128, &2u32, &0u64, &0i128);
+    assert_eq!(result, Err(Ok(FactoryError::MinLockPeriodTooShort)));
+    assert_eq!(t.client.pool_count(), 0);
+}
+
+#[test]
+fn test_create_pool_rejects_factory_address_as_asset() {
+    let t = setup();
+
+    let result = t.client.try_create_pool(
+        &t.factory_addr,
+        &1_728_000u128,
+        &2u32,
+        &25u64,
+        &0i128,
+    );
+    assert_eq!(result, Err(Ok(FactoryError::InvalidAsset)));
+    assert_eq!(t.client.pool_count(), 0);
+}
+
+#[test]
 fn test_create_pool_rejects_non_token_asset() {
     let t = setup();
     // A bare generated address is not a deployed SEP-41 token contract, so it
