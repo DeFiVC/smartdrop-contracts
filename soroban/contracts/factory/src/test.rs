@@ -879,6 +879,46 @@ fn test_create_pools_batch_rolls_back_when_any_pool_is_invalid() {
 }
 
 #[test]
+fn test_create_pools_batch_rejects_more_than_max_batch_size() {
+    let t = setup();
+    let mut pools = vec![&t.env];
+    for _ in 0..=MAX_BATCH_SIZE {
+        pools.push_back(PoolParams {
+            asset: test_asset(&t.env),
+            daily_rate: 17_280_000,
+            global_multiplier: 2,
+            min_lock_period: 100,
+            min_stake_amount: 1_000_000,
+        });
+    }
+
+    assert_eq!(
+        t.client.try_create_pools_batch(&pools),
+        Err(Ok(FactoryError::BatchTooLarge))
+    );
+    assert_eq!(t.client.pool_count(), 0);
+}
+
+#[test]
+fn test_create_pools_batch_accepts_exactly_max_batch_size() {
+    let t = setup();
+    let mut pools = vec![&t.env];
+    for _ in 0..MAX_BATCH_SIZE {
+        pools.push_back(PoolParams {
+            asset: test_asset(&t.env),
+            daily_rate: 17_280_000,
+            global_multiplier: 2,
+            min_lock_period: 100,
+            min_stake_amount: 1_000_000,
+        });
+    }
+
+    let ids = t.client.create_pools_batch(&pools);
+    assert_eq!(ids.len(), MAX_BATCH_SIZE);
+    assert_eq!(t.client.pool_count(), MAX_BATCH_SIZE);
+}
+
+#[test]
 fn test_get_pool_returns_correct_record() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1420,13 +1460,9 @@ fn test_create_pool_rejects_zero_min_lock_period() {
 fn test_create_pool_rejects_factory_address_as_asset() {
     let t = setup();
 
-    let result = t.client.try_create_pool(
-        &t.factory_addr,
-        &1_728_000u128,
-        &2u32,
-        &25u64,
-        &0i128,
-    );
+    let result = t
+        .client
+        .try_create_pool(&t.factory_addr, &1_728_000u128, &2u32, &25u64, &0i128);
     assert_eq!(result, Err(Ok(FactoryError::InvalidAsset)));
     assert_eq!(t.client.pool_count(), 0);
 }
@@ -1583,7 +1619,11 @@ fn test_refresh_pool_ttls_stays_permissionless_for_any_caller() {
     let t = setup_with_pool_records(3);
     let stranger = Address::generate(&t.env);
     // No admin auth provided at all: assert the refresh still succeeds.
-    let sweep = t.client.try_refresh_pool_ttls(&0u32, &3u32).unwrap().unwrap();
+    let sweep = t
+        .client
+        .try_refresh_pool_ttls(&0u32, &3u32)
+        .unwrap()
+        .unwrap();
     assert_eq!(sweep.refreshed.len(), 3);
     assert_eq!(sweep.missing, 0);
     assert_eq!(
@@ -1641,7 +1681,10 @@ fn test_refresh_pool_ttls_reports_only_existing_pools_and_counts_gaps() {
     assert_eq!(sweep.refreshed.len(), 2);
     assert_eq!(sweep.refreshed.get(0), Some(p0));
     assert_eq!(sweep.refreshed.get(1), Some(p2));
-    assert_eq!(sweep.missing, 1, "the gap must be reported, not silently skipped");
+    assert_eq!(
+        sweep.missing, 1,
+        "the gap must be reported, not silently skipped"
+    );
     assert_eq!(sweep.end_id, p2 + 1);
 
     for id in [p0, p2] {
@@ -1937,13 +1980,9 @@ fn test_create_pool_rejects_minimum_stake_above_the_maximum() {
     let t = setup();
     let asset = test_asset(&t.env);
 
-    let result = t.client.try_create_pool(
-        &asset,
-        &1_728_000u128,
-        &2u32,
-        &25u64,
-        &(10i128.pow(18) + 1),
-    );
+    let result =
+        t.client
+            .try_create_pool(&asset, &1_728_000u128, &2u32, &25u64, &(10i128.pow(18) + 1));
 
     assert_eq!(result, Err(Ok(FactoryError::InvalidMinStakeAmount)));
     assert_eq!(t.client.pool_count(), 0);
@@ -2005,9 +2044,15 @@ fn test_create_pool_maintains_the_asset_index() {
     let asset = test_asset(&t.env);
     let other_asset = test_asset(&t.env);
 
-    let first = t.client.create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
-    let second = t.client.create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
-    let other = t.client.create_pool(&other_asset, &1_728_000u128, &2u32, &10u64, &0i128);
+    let first = t
+        .client
+        .create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+    let second = t
+        .client
+        .create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+    let other = t
+        .client
+        .create_pool(&other_asset, &1_728_000u128, &2u32, &10u64, &0i128);
 
     // The index returns only the pools for the requested asset...
     let page = t.client.get_pools_by_asset(&asset, &0u32, &10u32);
@@ -2031,12 +2076,17 @@ fn test_asset_pool_count_agrees_with_the_index() {
 
     assert_eq!(t.client.pool_count_by_asset(&asset), 0);
 
-    t.client.create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
-    t.client.create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+    t.client
+        .create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+    t.client
+        .create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
 
     assert_eq!(t.client.pool_count_by_asset(&asset), 2);
     assert_eq!(
-        t.client.get_pools_by_asset(&asset, &0u32, &10u32).records.len(),
+        t.client
+            .get_pools_by_asset(&asset, &0u32, &10u32)
+            .records
+            .len(),
         2
     );
 }
@@ -2082,7 +2132,8 @@ fn test_asset_index_survives_a_paginated_walk() {
     let t = setup();
     let asset = test_asset(&t.env);
     for _ in 0..3 {
-        t.client.create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
+        t.client
+            .create_pool(&asset, &1_728_000u128, &2u32, &10u64, &0i128);
     }
     t.client
         .create_pool(&test_asset(&t.env), &1_728_000u128, &2u32, &10u64, &0i128);
