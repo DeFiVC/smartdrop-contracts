@@ -6,7 +6,9 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, vec, Address, BytesN, Env, IntoVal, String, Symbol, Val,
     Vec,
 };
-use types::{DataKey, ListPoolsResponse, PoolRecord, PoolSort, PoolStatus, RefreshPoolTtlsResponse};
+use types::{
+    DataKey, ListPoolsResponse, PoolRecord, PoolSort, PoolStatus, RefreshPoolTtlsResponse,
+};
 
 pub use types::FactoryError;
 pub use types::PoolParams;
@@ -44,6 +46,11 @@ const MAX_CREDIT_RATE: i128 = 100_000_000;
 // `create_pool`'s public unit is bounded directly rather than only after
 // ledger conversion (#524-#527).
 const MAX_DAILY_RATE: u128 = MAX_CREDIT_RATE as u128 * LEDGERS_PER_DAY;
+// Maximum number of pools that `create_pools_batch` will create in a single
+// call. Each entry deploys a full farming-pool WASM instance, so an unbounded
+// batch is a resource-exhaustion vector against the deploying transaction
+// (#528-#531).
+const MAX_BATCH_SIZE: u32 = 10;
 
 /// Convert a "credits per day" figure into the deployed pool's native
 /// "credits per ledger" `credit_rate`.
@@ -82,8 +89,10 @@ fn daily_rate_to_credit_rate(daily_rate: u128) -> Result<i128, FactoryError> {
 /// (issue #325).
 fn publish_pool_gap(env: &Env, pool_id: u32) {
     #[allow(deprecated)]
-    env.events()
-        .publish((symbol_short!("factory"), symbol_short!("pool_gap")), pool_id);
+    env.events().publish(
+        (symbol_short!("factory"), symbol_short!("pool_gap")),
+        pool_id,
+    );
 }
 
 fn bump_instance(env: &Env) {
@@ -401,7 +410,9 @@ fn create_pool_inner(
     let next_count = pool_id
         .checked_add(1)
         .ok_or(FactoryError::PoolCountOverflow)?;
-    env.storage().instance().set(&DataKey::PoolCount, &next_count);
+    env.storage()
+        .instance()
+        .set(&DataKey::PoolCount, &next_count);
     let wasm_hash = load_wasm_hash(&env)?;
     let salt = pool_salt(&env, pool_id);
 
@@ -527,7 +538,7 @@ impl Factory {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FactoryError::AlreadyInitialized);
         }
-        
+
         // Issue #374: Validate admin address before storing
         let zero_admin = Address::from_string(&soroban_sdk::String::from_str(
             &env,
@@ -536,7 +547,7 @@ impl Factory {
         if admin == zero_admin {
             return Err(FactoryError::InvalidAdmin);
         }
-        
+
         if pool_wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(FactoryError::InvalidWasmHash);
         }
@@ -544,10 +555,9 @@ impl Factory {
         env.storage()
             .instance()
             .set(&DataKey::WasmHash, &pool_wasm_hash);
-        env.storage().persistent().set(
-            &DataKey::ApprovedWasmHash(pool_wasm_hash),
-            &true,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::ApprovedWasmHash(pool_wasm_hash), &true);
         // Keep the initial approval alive for as long as the factory is used.
         let approved_hash = load_wasm_hash(&env)?;
         env.storage().persistent().extend_ttl(
@@ -1378,7 +1388,7 @@ impl Factory {
         bump_pool(&env, pool_id);
 
         let no_args: Vec<Val> = vec![&env];
-        
+
         // Query is_paused status
         let is_paused = match env.try_invoke_contract::<bool, soroban_sdk::Error>(
             &record.address,
@@ -1433,10 +1443,9 @@ impl Factory {
         // An admin-approved hash may be used for future deployments and
         // upgrades. The approval is intentionally explicit because a hash
         // alone cannot prove that its uploaded WASM implements FarmingPool.
-        env.storage().persistent().set(
-            &DataKey::ApprovedWasmHash(new_hash.clone()),
-            &true,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::ApprovedWasmHash(new_hash.clone()), &true);
         env.storage().persistent().extend_ttl(
             &DataKey::ApprovedWasmHash(new_hash.clone()),
             TTL_THRESHOLD,
@@ -1562,6 +1571,14 @@ impl Factory {
         let admin = load_admin(&env)?;
         validate_factory_admin(&env, &admin)?;
         admin.require_auth();
+
+        // Validation 35: Cap the batch size before any pool is deployed. Each
+        // entry triggers a WASM deploy inside `create_pool_inner`, so an
+        // unbounded batch can exhaust the transaction's resource budget and
+        // trap with an opaque host error rather than a typed failure (#528-#531).
+        if pools.len() > MAX_BATCH_SIZE {
+            return Err(FactoryError::BatchTooLarge);
+        }
 
         let mut pool_ids = vec![&env];
         for params in pools.iter() {

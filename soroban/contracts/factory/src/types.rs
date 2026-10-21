@@ -188,4 +188,6 @@ pub enum FactoryError {
     /// threshold, which would trap staked funds for an effectively permanent
     /// window.
     MinLockPeriodAboveCeiling = 19,
+    /// `create_pools_batch` was called with more entries than `MAX_BATCH_SIZE`.
+    BatchTooLarge = 20,
 }
