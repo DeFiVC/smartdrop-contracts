@@ -14,13 +14,16 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // Attempt to create pool with zero address should fail
-        let zero_address = Address::from_string(&String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"));
+        let zero_address = Address::from_string(&String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ));
         let result = factory.create_pool(
             &zero_address,
-            1_000_000,  // daily_rate
-            100,        // global_multiplier
-            1000,       // min_lock_period
-            1_000_000,  // min_stake_amount
+            1_000_000, // daily_rate
+            100,       // global_multiplier
+            1000,      // min_lock_period
+            1_000_000, // min_stake_amount
         );
         assert!(result.is_err());
     }
@@ -35,13 +38,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // Non-contract address should fail validation
-        let result = factory.create_pool(
-            &invalid_asset,
-            1_000_000,
-            100,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&invalid_asset, 1_000_000, 100, 1000, 1_000_000);
         assert!(result.is_err());
     }
 
@@ -55,13 +52,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // Valid token contract should succeed
-        let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&token, 1_000_000, 100, 1000, 1_000_000);
         assert!(result.is_ok());
     }
 
@@ -75,13 +66,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // Contract without symbol method should fail
-        let result = factory.create_pool(
-            &bad_contract,
-            1_000_000,
-            100,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&bad_contract, 1_000_000, 100, 1000, 1_000_000);
         assert!(result.is_err());
     }
 

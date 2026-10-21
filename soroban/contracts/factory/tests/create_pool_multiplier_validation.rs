@@ -18,11 +18,8 @@ mod tests {
 
         // global_multiplier = 0 should fail
         let result = factory.create_pool(
-            &token,
-            1_000_000,
-            0,  // global_multiplier = 0
-            1000,
-            1_000_000,
+            &token, 1_000_000, 0, // global_multiplier = 0
+            1000, 1_000_000,
         );
         assert!(result.is_err());
     }
@@ -38,11 +35,8 @@ mod tests {
 
         // global_multiplier = 1 should succeed
         let result = factory.create_pool(
-            &token,
-            1_000_000,
-            1,  // global_multiplier = 1 (minimum)
-            1000,
-            1_000_000,
+            &token, 1_000_000, 1, // global_multiplier = 1 (minimum)
+            1000, 1_000_000,
         );
         assert!(result.is_ok());
     }
@@ -57,13 +51,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // global_multiplier = MAX_GLOBAL_MULTIPLIER should succeed
-        let result = factory.create_pool(
-            &token,
-            1_000_000,
-            MAX_GLOBAL_MULTIPLIER,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&token, 1_000_000, MAX_GLOBAL_MULTIPLIER, 1000, 1_000_000);
         assert!(result.is_ok());
     }
 
@@ -117,13 +105,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // global_multiplier = u32::MAX should fail
-        let result = factory.create_pool(
-            &token,
-            1_000_000,
-            u32::MAX,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&token, 1_000_000, u32::MAX, 1000, 1_000_000);
         assert!(result.is_err());
     }
 

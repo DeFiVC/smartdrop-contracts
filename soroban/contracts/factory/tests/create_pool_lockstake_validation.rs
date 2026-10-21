@@ -20,10 +20,7 @@ mod tests {
 
         // min_lock_period = 0 should fail
         let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            0,  // min_lock_period = 0
+            &token, 1_000_000, 100, 0, // min_lock_period = 0
             1_000_000,
         );
         assert!(result.is_err());
@@ -40,10 +37,7 @@ mod tests {
 
         // min_lock_period = 1 should succeed
         let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            1,  // min_lock_period = 1 (minimum)
+            &token, 1_000_000, 100, 1, // min_lock_period = 1 (minimum)
             1_000_000,
         );
         assert!(result.is_ok());
@@ -63,7 +57,7 @@ mod tests {
             &token,
             1_000_000,
             100,
-            (365 * 24 * 60 * 60 / 5) as u64,  // ~365 days at 5s/ledger
+            (365 * 24 * 60 * 60 / 5) as u64, // ~365 days at 5s/ledger
             1_000_000,
         );
         assert!(result.is_ok());
@@ -79,13 +73,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // u64::MAX as min_lock_period should fail (doesn't fit in u32)
-        let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            u64::MAX,
-            1_000_000,
-        );
+        let result = factory.create_pool(&token, 1_000_000, 100, u64::MAX, 1_000_000);
         assert!(result.is_err());
     }
 
@@ -100,11 +88,8 @@ mod tests {
 
         // min_stake_amount = 0 should default to MIN_STAKE_AMOUNT
         let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            1000,
-            0,  // min_stake_amount = 0 (will default to MIN_STAKE_AMOUNT)
+            &token, 1_000_000, 100, 1000,
+            0, // min_stake_amount = 0 (will default to MIN_STAKE_AMOUNT)
         );
         assert!(result.is_ok());
     }
@@ -120,11 +105,8 @@ mod tests {
 
         // Negative min_stake_amount should default to MIN_STAKE_AMOUNT
         let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            1000,
-            -1,  // Negative value should be treated as invalid/use default
+            &token, 1_000_000, 100, 1000,
+            -1, // Negative value should be treated as invalid/use default
         );
         assert!(result.is_ok());
     }
@@ -139,13 +121,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // min_stake_amount = MIN_STAKE_AMOUNT should succeed
-        let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            1000,
-            MIN_STAKE_AMOUNT,
-        );
+        let result = factory.create_pool(&token, 1_000_000, 100, 1000, MIN_STAKE_AMOUNT);
         assert!(result.is_ok());
     }
 
@@ -159,13 +135,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // min_stake_amount < MIN_STAKE_AMOUNT should fail
-        let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            1000,
-            MIN_STAKE_AMOUNT - 1,
-        );
+        let result = factory.create_pool(&token, 1_000_000, 100, 1000, MIN_STAKE_AMOUNT - 1);
         assert!(result.is_err());
     }
 
@@ -179,13 +149,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // min_stake_amount = MAX_STAKE_AMOUNT should succeed
-        let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            1000,
-            MAX_STAKE_AMOUNT,
-        );
+        let result = factory.create_pool(&token, 1_000_000, 100, 1000, MAX_STAKE_AMOUNT);
         assert!(result.is_ok());
     }
 
@@ -199,13 +163,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // min_stake_amount > MAX_STAKE_AMOUNT should fail
-        let result = factory.create_pool(
-            &token,
-            1_000_000,
-            100,
-            1000,
-            MAX_STAKE_AMOUNT + 1,
-        );
+        let result = factory.create_pool(&token, 1_000_000, 100, 1000, MAX_STAKE_AMOUNT + 1);
         assert!(result.is_err());
     }
 
@@ -244,10 +202,10 @@ mod tests {
         // All boundary values should succeed when individually valid
         let result = factory.create_pool(
             &token,
-            1,                  // min daily_rate
-            1,                  // min global_multiplier
-            1,                  // min min_lock_period
-            MIN_STAKE_AMOUNT,   // min min_stake_amount
+            1,                // min daily_rate
+            1,                // min global_multiplier
+            1,                // min min_lock_period
+            MIN_STAKE_AMOUNT, // min min_stake_amount
         );
         assert!(result.is_ok());
     }

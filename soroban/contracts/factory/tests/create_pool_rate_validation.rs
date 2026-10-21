@@ -19,11 +19,8 @@ mod tests {
 
         // Zero daily_rate should fail
         let result = factory.create_pool(
-            &token,
-            0,  // daily_rate = 0
-            100,
-            1000,
-            1_000_000,
+            &token, 0, // daily_rate = 0
+            100, 1000, 1_000_000,
         );
         assert!(result.is_err());
     }
@@ -39,11 +36,8 @@ mod tests {
 
         // Minimum valid daily_rate (converts to credit_rate >= 1)
         let result = factory.create_pool(
-            &token,
-            1,  // daily_rate = 1 (ceiling division gives credit_rate = 1)
-            100,
-            1000,
-            1_000_000,
+            &token, 1, // daily_rate = 1 (ceiling division gives credit_rate = 1)
+            100, 1000, 1_000_000,
         );
         assert!(result.is_ok());
     }
@@ -58,13 +52,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // Exactly LEDGERS_PER_DAY should convert to credit_rate = 1
-        let result = factory.create_pool(
-            &token,
-            LEDGERS_PER_DAY,
-            100,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&token, LEDGERS_PER_DAY, 100, 1000, 1_000_000);
         assert!(result.is_ok());
     }
 
@@ -79,13 +67,7 @@ mod tests {
 
         // daily_rate that converts to credit_rate > MAX_CREDIT_RATE should fail
         let excessive_rate = ((MAX_CREDIT_RATE + 1) * LEDGERS_PER_DAY as i128) as u128;
-        let result = factory.create_pool(
-            &token,
-            excessive_rate,
-            100,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&token, excessive_rate, 100, 1000, 1_000_000);
         assert!(result.is_err());
     }
 
@@ -99,13 +81,7 @@ mod tests {
         factory.initialize(&admin, &BytesN::from_array(&env, &[1u8; 32]));
 
         // daily_rate just below LEDGERS_PER_DAY should round up to credit_rate = 1
-        let result = factory.create_pool(
-            &token,
-            LEDGERS_PER_DAY - 1,
-            100,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&token, LEDGERS_PER_DAY - 1, 100, 1000, 1_000_000);
         assert!(result.is_ok());
     }
 
@@ -120,13 +96,7 @@ mod tests {
 
         // Maximum u128 value that fits in i128 after ceiling division
         let max_safe_rate = (u128::MAX / LEDGERS_PER_DAY) * LEDGERS_PER_DAY;
-        let result = factory.create_pool(
-            &token,
-            max_safe_rate,
-            100,
-            1000,
-            1_000_000,
-        );
+        let result = factory.create_pool(&token, max_safe_rate, 100, 1000, 1_000_000);
         // Should either succeed or fail gracefully, not panic
         let _ = result;
     }
